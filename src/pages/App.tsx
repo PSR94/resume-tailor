@@ -151,9 +151,9 @@ export default function App() {
       <main className="app-main">
         {step === "upload" && <UploadStep serverOk={serverOk} error={uploadError} onDismissError={() => setUploadError("")} onUpload={handleResumeUpload} onCheckServer={checkServer} />}
         {step === "jd" && <JDStep profile={profile} jdText={jdText} onJdChange={setJdText} aiProvider={aiProvider} onAiProviderChange={setAiProvider} onNext={() => setStep("scoring-prompt")} onBack={() => setStep("upload")} />}
-        {step === "scoring-prompt" && <PromptStep stepNumber={1} title={`Copy this prompt into ${AI_CONFIG[aiProvider].name}`} description={`Asks ${AI_CONFIG[aiProvider].name} to score every bullet against the JD. Open ${AI_CONFIG[aiProvider].name}, paste it, wait for the response, then come back.`} aiProvider={aiProvider} prompt={scoringPrompt} copied={copied} onCopy={() => copyPrompt(scoringPrompt)} onNext={() => setStep("scoring-paste")} onBack={() => setStep("jd")} />}
+        {step === "scoring-prompt" && <PromptStep stepNumber={1} title={`Copy this prompt into ${AI_CONFIG[aiProvider].name}`} description={`Asks ${AI_CONFIG[aiProvider].name} to score every bullet against the JD. Paste it, wait for the full JSON response, then come back.`} aiProvider={aiProvider} onAiProviderChange={setAiProvider} prompt={scoringPrompt} copied={copied} onCopy={() => copyPrompt(scoringPrompt)} onNext={() => setStep("scoring-paste")} onBack={() => setStep("jd")} />}
         {step === "scoring-paste" && <PasteStep stepNumber={2} title={`Paste ${AI_CONFIG[aiProvider].name}'s response`} description={`Copy the entire JSON response from ${AI_CONFIG[aiProvider].name} and paste it below. It should start with { "jobTitle": ...`} placeholder={'{\n  "jobTitle": "...",\n  "bullets": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteScoring} onBack={() => setStep("scoring-prompt")} submitLabel="Parse Scores →" aiName={AI_CONFIG[aiProvider].name} />}
-        {step === "swap-prompt" && scoring && <ScoringPreviewStep scoring={scoring} swapPrompt={swapPrompt} aiProvider={aiProvider} copied={copied} onCopy={() => copyPrompt(swapPrompt)} onNext={() => setStep("swap-paste")} onBack={() => setStep("scoring-paste")} />}
+        {step === "swap-prompt" && scoring && <ScoringPreviewStep scoring={scoring} swapPrompt={swapPrompt} aiProvider={aiProvider} onAiProviderChange={setAiProvider} copied={copied} onCopy={() => copyPrompt(swapPrompt)} onNext={() => setStep("swap-paste")} onBack={() => setStep("scoring-paste")} />}
         {step === "swap-paste" && <PasteStep stepNumber={4} title={`Paste ${AI_CONFIG[aiProvider].name}'s improvement response`} description='Paste the JSON response. It should start with { "swaps": ...' placeholder={'{\n  "swaps": [...],\n  "skillsToConfirm": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteSwaps} onBack={() => setStep("swap-prompt")} submitLabel="Parse Swaps →" aiName={AI_CONFIG[aiProvider].name} />
         {step === "confirm-skills" && manifest && <ConfirmSkillsStep manifest={manifest} onConfirm={(i, v) => setManifest((m) => { if (!m) return m; const sc = [...m.skillsToConfirm]; sc[i] = { ...sc[i], confirmed: v }; return { ...m, skillsToConfirm: sc }; })} onDone={() => { setManifest((m) => { if (!m) return m; const denied = m.skillsToConfirm.filter((s) => s.confirmed === false).map((s) => s.skill.toLowerCase()); return { ...m, swaps: m.swaps.filter((s) => !s.jdSkillsAddressed.some((sk) => denied.includes(sk.toLowerCase()))) }; }); setStep("swaps"); }} onBack={() => setStep("swap-paste")} />}
         {needsReupload && step !== "upload" && step !== "jd" && step !== "done" && (
@@ -228,14 +228,28 @@ function JDStep({ profile, jdText, onJdChange, aiProvider, onAiProviderChange, o
   );
 }
 
-function PromptStep({ stepNumber, title, description, aiProvider, prompt, copied, onCopy, onNext, onBack }: { stepNumber: number; title: string; description: string; aiProvider: AiProvider; prompt: string; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
+function AiProviderPicker({ aiProvider, onChange }: { aiProvider: AiProvider; onChange: (p: AiProvider) => void }) {
+  return (
+    <div className="ai-picker ai-picker-inline">
+      <span className="ai-picker-label">Using:</span>
+      <div className="ai-picker-options">
+        {(["chatgpt", "claude", "other"] as AiProvider[]).map((p) => (
+          <button key={p} className={`ai-pill ${aiProvider === p ? "active" : ""}`} onClick={() => onChange(p)}>{AI_CONFIG[p].name}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PromptStep({ stepNumber, title, description, aiProvider, onAiProviderChange, prompt, copied, onCopy, onNext, onBack }: { stepNumber: number; title: string; description: string; aiProvider: AiProvider; onAiProviderChange: (p: AiProvider) => void; prompt: string; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
   const ai = AI_CONFIG[aiProvider];
   const openStep = ai.url
     ? { n: "2", t: `Open ${ai.name}`, d: <a href={ai.url} target="_blank" rel="noreferrer" className="open-chatgpt-btn">Open {ai.name} in new tab →</a> }
     : { n: "2", t: "Open your AI assistant", d: <p>Open your preferred AI assistant in another tab.</p> };
   return (
     <div className="panel">
-      <div className="panel-header"><div><div className="step-badge">Step {stepNumber} of 4</div><h1 className="panel-title">{title}</h1><p className="panel-sub">{description}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
+      <div className="panel-header"><div><div className="step-badge">Step {stepNumber} of 4</div><h1 className="panel-title">Copy this prompt into {ai.name}</h1><p className="panel-sub">{description}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
+      <AiProviderPicker aiProvider={aiProvider} onChange={onAiProviderChange} />
       <div className="chatgpt-guide">
         {[{ n: "1", t: "Copy the prompt below", d: <p>Click "Copy Prompt" to copy everything to your clipboard.</p> }, openStep, { n: "3", t: "Paste and send", d: <p>Paste (Cmd+V / Ctrl+V) and hit Enter. Wait for the full JSON response.</p> }, { n: "4", t: "Come back here", d: <p>Click "I have the response" below and paste the reply on the next screen.</p> }].map((g) => (<div key={g.n} className="guide-step"><div className="guide-num">{g.n}</div><div><b>{g.t}</b>{g.d}</div></div>))}
       </div>
@@ -255,7 +269,7 @@ function PasteStep({ stepNumber, title, description, placeholder, value, onChang
   );
 }
 
-function ScoringPreviewStep({ scoring, swapPrompt, aiProvider, copied, onCopy, onNext, onBack }: { scoring: unknown; swapPrompt: string; aiProvider: AiProvider; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
+function ScoringPreviewStep({ scoring, swapPrompt, aiProvider, onAiProviderChange, copied, onCopy, onNext, onBack }: { scoring: unknown; swapPrompt: string; aiProvider: AiProvider; onAiProviderChange: (p: AiProvider) => void; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
   const s = scoring as Record<string, unknown>;
   const ai = AI_CONFIG[aiProvider];
   const bullets = (s.bullets as Array<Record<string, unknown>>) ?? [];
@@ -267,6 +281,7 @@ function ScoringPreviewStep({ scoring, swapPrompt, aiProvider, copied, onCopy, o
       <div className="scores-quick">{sorted.slice(0, 6).map((b, i) => { const score = b.score as number; return (<div key={i} className={`score-quick-row ${score < 5 ? "low" : score < 7 ? "mid" : "high"}`}><div className="score-circle">{score}</div><p className="score-quick-text">{(b.bullet as string).slice(0, 90)}{(b.bullet as string).length > 90 ? "…" : ""}</p></div>); })}{sorted.length > 6 && <p className="scores-more">+{sorted.length - 6} more bullets scored</p>}</div>
       <div className="skills-row">{(s.keySkillsMissing as string[] ?? []).slice(0, 5).map((sk) => <span key={sk} className="tag tag-red">{sk}</span>)}{(s.keySkillsFound as string[] ?? []).slice(0, 4).map((sk) => <span key={sk} className="tag tag-green">{sk}</span>)}</div>
       <div className="divider-label">Now send a second prompt to generate improvements →</div>
+      <AiProviderPicker aiProvider={aiProvider} onChange={onAiProviderChange} />
       <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Improvement Prompt for {ai.name}</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{swapPrompt.slice(0, 400)}…</pre><p className="prompt-length">{swapPrompt.length.toLocaleString()} characters</p></div>
       <div className="chatgpt-quick-guide"><span>1. Copy prompt above</span><span>→</span>{ai.url ? <a href={ai.url} target="_blank" rel="noreferrer">2. Paste into {ai.name} →</a> : <span>2. Paste into your AI assistant</span>}<span>→</span><span>3. Click below when done</span></div>
       <button className="btn-accent btn-lg full-w" onClick={onNext}>I have the response →</button>

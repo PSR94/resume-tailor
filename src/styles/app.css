@@ -1325,6 +1325,7 @@
 }
 .ai-pill:hover { border-color: var(--accent); color: var(--accent); }
 .ai-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ai-picker-inline { margin-bottom: 12px; }
 
 /* ── De-emphasis section ───────────────────── */
 .section-divider {
