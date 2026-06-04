@@ -89,6 +89,12 @@ export default function App() {
         const update = { resumeFileName: file.name, resumeBase64: base64, resumeText: data.text };
         setProfile((p) => { const n = { ...p, ...update }; saveProfile(n); return n; });
         setNeedsReupload(false);
+        // Clear JD and any prior session data when a new resume is uploaded
+        sessionRef.current = {};
+        clearSession();
+        setJdTextRaw("");
+        setScoringRaw(null);
+        setManifestRaw(null);
         setStep("jd");
       } catch {
         setServerOk(false);
@@ -163,7 +169,7 @@ export default function App() {
           </div>
         )}
         {step === "swaps" && manifest && <SwapsStep manifest={manifest} error={applyError} onDismissError={() => setApplyError("")} onToggle={(id) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, approved: !s.approved } : s) } : m)} onEdit={(id, t) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, userEdited: t } : s) } : m)} onToggleDeEmphasis={(id) => setManifest((m) => m ? { ...m, deEmphasis: m.deEmphasis.map((d) => d.id === id ? { ...d, approved: !d.approved } : d) } : m)} onApply={handleApplySwaps} onBack={() => setStep("swap-paste")} />}
-        {step === "done" && <DoneStep onReset={() => { clearSession(); setJdTextRaw(""); setScoringRaw(null); setManifestRaw(null); setStepRaw("jd"); }} />}
+        {step === "done" && <DoneStep onReset={() => { sessionRef.current = {}; clearSession(); setJdTextRaw(""); setScoringRaw(null); setManifestRaw(null); setStepRaw("jd"); }} />}
       </main>
     </div>
   );
