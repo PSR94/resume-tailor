@@ -38,8 +38,20 @@ export interface SkillConfirm {
   confirmed: boolean | null;
 }
 
+export interface DeEmphasisItem {
+  id: string;
+  section: string;
+  roleIndex: number;
+  bulletIndex: number;
+  originalBullet: string;
+  shortenedBullet: string;
+  reason: string;
+  approved: boolean;
+}
+
 export interface SwapResponse {
   swaps: SwapItem[];
+  deEmphasis: DeEmphasisItem[];
   skillsToConfirm: SkillConfirm[];
 }
 
@@ -129,6 +141,22 @@ export function validateSwapResponse(raw: unknown): SwapResponse {
         approved: true,
       };
     }),
+    deEmphasis: Array.isArray(raw.deEmphasis)
+      ? raw.deEmphasis.map((item, index) => {
+        const label = `De-emphasis #${index + 1}`;
+        if (!isRecord(item)) throw new Error(`${label} must be an object.`);
+        return {
+          id: requireString(item.id, `${label} is missing id.`),
+          section: requireString(item.section, `${label} is missing section.`),
+          roleIndex: requireNumber(item.roleIndex, `${label} is missing roleIndex.`),
+          bulletIndex: requireNumber(item.bulletIndex, `${label} is missing bulletIndex.`),
+          originalBullet: requireString(item.originalBullet, `${label} is missing originalBullet.`),
+          shortenedBullet: requireString(item.shortenedBullet, `${label} is missing shortenedBullet.`),
+          reason: optionalString(item.reason),
+          approved: true,
+        };
+      })
+      : [],
     skillsToConfirm: Array.isArray(raw.skillsToConfirm)
       ? raw.skillsToConfirm.map((item, index) => {
         const label = `Skill confirmation #${index + 1}`;

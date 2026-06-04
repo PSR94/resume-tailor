@@ -357,14 +357,20 @@ def apply_swaps_with_report(doc: Document, swaps: list[dict]) -> tuple[Document,
 
     for idx, swap in enumerate(swaps):
         swap_id = swap.get("id") or f"swap_{idx}"
-        if swap.get("action") != "swap":
+        action = swap.get("action")
+        if action not in ("swap", "shorten"):
             skipped.append({"id": swap_id, "reason": "unsupported action"})
             continue
 
         section = swap.get("section", "")
         role_idx = swap.get("roleIndex", swap.get("role_index", 0))
         bullet_idx = swap.get("bulletIndex", swap.get("bullet_index", 0))
-        new_text = swap.get("newBullet", swap.get("new_bullet", "")).strip()
+        # "shorten" uses shortenedBullet; "swap" uses newBullet
+        new_text = (
+            swap.get("shortenedBullet", "").strip()
+            if action == "shorten"
+            else swap.get("newBullet", swap.get("new_bullet", "")).strip()
+        )
 
         if not new_text:
             skipped.append({"id": swap_id, "reason": "missing replacement bullet"})

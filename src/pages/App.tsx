@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildScoringPrompt, buildSwapPrompt } from "../lib/prompts";
 import { saveSession, loadSession, clearSession, saveProfile, loadProfile } from "../lib/storage";
-import { parseChatGPTJSON, validateScoringResponse, validateSwapResponse, type ScoringResponse, type SkillConfirm, type SwapItem } from "../lib/validation";
+import { parseChatGPTJSON, validateScoringResponse, validateSwapResponse, type ScoringResponse, type SkillConfirm, type SwapItem, type DeEmphasisItem } from "../lib/validation";
 import "../styles/app.css";
 
-interface Manifest { jobTitle: string; company: string; jdSummary: string; keySkillsFound: string[]; keySkillsMissing: string[]; atsKeywordGaps: string[]; swaps: SwapItem[]; skillsToConfirm: SkillConfirm[]; }
+interface Manifest { jobTitle: string; company: string; jdSummary: string; keySkillsFound: string[]; keySkillsMissing: string[]; atsKeywordGaps: string[]; swaps: SwapItem[]; deEmphasis: DeEmphasisItem[]; skillsToConfirm: SkillConfirm[]; }
 interface Profile { resumeText: string; resumeBase64: string; resumeFileName: string; }
 type Step = "upload" | "jd" | "scoring-prompt" | "scoring-paste" | "swap-prompt" | "swap-paste" | "confirm-skills" | "swaps" | "done";
 
@@ -103,7 +103,7 @@ export default function App() {
     try {
       const data = validateSwapResponse(parseChatGPTJSON(pasteValue));
       const s = scoring as ScoringResponse;
-      const m: Manifest = { jobTitle: s.jobTitle, company: s.company, jdSummary: s.jdSummary, keySkillsFound: s.keySkillsFound, keySkillsMissing: s.keySkillsMissing, atsKeywordGaps: s.atsKeywordGaps, swaps: data.swaps, skillsToConfirm: data.skillsToConfirm };
+      const m: Manifest = { jobTitle: s.jobTitle, company: s.company, jdSummary: s.jdSummary, keySkillsFound: s.keySkillsFound, keySkillsMissing: s.keySkillsMissing, atsKeywordGaps: s.atsKeywordGaps, swaps: data.swaps, deEmphasis: data.deEmphasis, skillsToConfirm: data.skillsToConfirm };
       setManifest(m); setStep(m.skillsToConfirm.length > 0 ? "confirm-skills" : "swaps");
     } catch (e: unknown) { setParseError((e as Error).message); }
   }
@@ -116,7 +116,9 @@ export default function App() {
       return;
     }
     try {
-      const approved = { ...manifest, swaps: manifest.swaps.filter((s) => s.approved).map((s) => ({ ...s, newBullet: s.userEdited ?? s.newBullet })) };
+      const approvedSwaps = manifest.swaps.filter((s) => s.approved).map((s) => ({ ...s, newBullet: s.userEdited ?? s.newBullet }));
+      const approvedDeEmphasis = manifest.deEmphasis.filter((d) => d.approved).map((d) => ({ ...d, action: "shorten" as const }));
+      const approved = { ...manifest, swaps: [...approvedSwaps, ...approvedDeEmphasis] };
       const res = await fetch("http://localhost:7842/apply-swaps", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume_base64: profile.resumeBase64, manifest: approved }) });
       if (!res.ok) { setApplyError(await readApiError(res)); return; }
       const data = await res.json();
@@ -150,7 +152,7 @@ export default function App() {
             <button type="button" aria-label="Dismiss" onClick={() => setNeedsReupload(false)}>×</button>
           </div>
         )}
-        {step === "swaps" && manifest && <SwapsStep manifest={manifest} error={applyError} onDismissError={() => setApplyError("")} onToggle={(id) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, approved: !s.approved } : s) } : m)} onEdit={(id, t) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, userEdited: t } : s) } : m)} onApply={handleApplySwaps} onBack={() => setStep("swap-paste")} />}
+        {step === "swaps" && manifest && <SwapsStep manifest={manifest} error={applyError} onDismissError={() => setApplyError("")} onToggle={(id) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, approved: !s.approved } : s) } : m)} onEdit={(id, t) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, userEdited: t } : s) } : m)} onToggleDeEmphasis={(id) => setManifest((m) => m ? { ...m, deEmphasis: m.deEmphasis.map((d) => d.id === id ? { ...d, approved: !d.approved } : d) } : m)} onApply={handleApplySwaps} onBack={() => setStep("swap-paste")} />
         {step === "done" && <DoneStep onReset={() => { clearSession(); setJdTextRaw(""); setScoringRaw(null); setManifestRaw(null); setStepRaw("jd"); }} />}
       </main>
     </div>
@@ -271,17 +273,40 @@ function ConfirmSkillsStep({ manifest, onConfirm, onDone, onBack }: { manifest: 
   );
 }
 
-function SwapsStep({ manifest, error, onDismissError, onToggle, onEdit, onApply, onBack }: { manifest: Manifest; error: string; onDismissError: () => void; onToggle: (id: string) => void; onEdit: (id: string, t: string) => void; onApply: () => void; onBack: () => void }) {
+function SwapsStep({ manifest, error, onDismissError, onToggle, onEdit, onToggleDeEmphasis, onApply, onBack }: { manifest: Manifest; error: string; onDismissError: () => void; onToggle: (id: string) => void; onEdit: (id: string, t: string) => void; onToggleDeEmphasis: (id: string) => void; onApply: () => void; onBack: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const approved = manifest.swaps.filter((s) => s.approved).length;
-  const noSwaps = manifest.swaps.length === 0;
+  const approvedDe = manifest.deEmphasis.filter((d) => d.approved).length;
+  const totalApproved = approved + approvedDe;
+  const noSwaps = manifest.swaps.length === 0 && manifest.deEmphasis.length === 0;
   return (
     <div className="panel">
-      <div className="panel-header"><div><h1 className="panel-title">Review Swaps</h1><p className="panel-sub">{noSwaps ? "No swaps to apply." : `${approved} of ${manifest.swaps.length} approved. Toggle off any to skip. Click green bullet to edit.`}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
+      <div className="panel-header"><div><h1 className="panel-title">Review Swaps</h1><p className="panel-sub">{noSwaps ? "No changes to apply." : `${totalApproved} change${totalApproved !== 1 ? "s" : ""} approved. Toggle off any to skip.`}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
       {noSwaps && <div className="warn-box">⚠ No swaps remain — all were removed because you skipped the skills they required. Go back and paste a new response, or accept at least one skill on the previous step.</div>}
       <div className="swaps-layout">
-        <div className="swaps-list">{manifest.swaps.map((swap) => (<div key={swap.id} className={`swap-card ${swap.approved ? "approved" : "rejected"}`}><div className="swap-card-header"><div className="swap-meta"><span className="swap-section-tag">{swap.section}</span><span className="swap-skills-tag">{swap.jdSkillsAddressed.join(", ")}</span></div><label className="toggle-switch"><input type="checkbox" checked={swap.approved} onChange={() => onToggle(swap.id)} /><span className="toggle-track"><span className="toggle-thumb" /></span></label></div><div className="swap-diff-grid"><div className="diff-block old"><div className="diff-label">Remove · {swap.originalScore}/10</div><p>{swap.originalBullet}</p></div><div className="diff-arrow">→</div><div className="diff-block new" onClick={() => setEditingId(swap.id)} title="Click to edit"><div className="diff-label">Add · {swap.newScore}/10 ✏</div>{editingId === swap.id ? <textarea className="inline-edit" value={swap.userEdited ?? swap.newBullet} autoFocus onChange={(e) => onEdit(swap.id, e.target.value)} onBlur={() => setEditingId(null)} /> : <p>{swap.userEdited ?? swap.newBullet}</p>}</div></div></div>))}</div>
-        <div className="swaps-sidebar"><div className="card summary-card">{error && <ErrorBanner message={error} onDismiss={onDismissError} />}<div className="card-title">Summary</div><div className="summary-rows"><div className="summary-row"><span>Approved</span><span className="summary-val green">{approved}</span></div><div className="summary-row"><span>Skipped</span><span className="summary-val muted">{manifest.swaps.length - approved}</span></div></div>{manifest.atsKeywordGaps.length > 0 && (<><div className="card-title" style={{ marginTop: 16 }}>ATS Gaps</div><div className="tag-cloud">{manifest.atsKeywordGaps.map((k) => <span key={k} className="tag tag-yellow">{k}</span>)}</div></>)}<button className="btn-accent full-w" style={{ marginTop: 20 }} onClick={onApply} disabled={approved === 0}>Apply {approved} Swap{approved !== 1 ? "s" : ""} & Download →</button></div></div>
+        <div className="swaps-list">
+          {manifest.swaps.map((swap) => (<div key={swap.id} className={`swap-card ${swap.approved ? "approved" : "rejected"}`}><div className="swap-card-header"><div className="swap-meta"><span className="swap-section-tag">{swap.section}</span><span className="swap-skills-tag">{swap.jdSkillsAddressed.join(", ")}</span></div><label className="toggle-switch"><input type="checkbox" checked={swap.approved} onChange={() => onToggle(swap.id)} /><span className="toggle-track"><span className="toggle-thumb" /></span></label></div><div className="swap-diff-grid"><div className="diff-block old"><div className="diff-label">Remove · {swap.originalScore}/10</div><p>{swap.originalBullet}</p></div><div className="diff-arrow">→</div><div className="diff-block new" onClick={() => setEditingId(swap.id)} title="Click to edit"><div className="diff-label">Add · {swap.newScore}/10 ✏</div>{editingId === swap.id ? <textarea className="inline-edit" value={swap.userEdited ?? swap.newBullet} autoFocus onChange={(e) => onEdit(swap.id, e.target.value)} onBlur={() => setEditingId(null)} /> : <p>{swap.userEdited ?? swap.newBullet}</p>}</div></div></div>))}
+          {manifest.deEmphasis.length > 0 && (
+            <>
+              <div className="section-divider">Reduce Emphasis — less relevant to this JD</div>
+              {manifest.deEmphasis.map((d) => (
+                <div key={d.id} className={`swap-card ${d.approved ? "approved" : "rejected"}`}>
+                  <div className="swap-card-header">
+                    <div className="swap-meta"><span className="swap-section-tag">{d.section}</span><span className="swap-skills-tag" title={d.reason}>shorten</span></div>
+                    <label className="toggle-switch"><input type="checkbox" checked={d.approved} onChange={() => onToggleDeEmphasis(d.id)} /><span className="toggle-track"><span className="toggle-thumb" /></span></label>
+                  </div>
+                  <div className="swap-diff-grid">
+                    <div className="diff-block old"><div className="diff-label">Original</div><p>{d.originalBullet}</p></div>
+                    <div className="diff-arrow">→</div>
+                    <div className="diff-block new"><div className="diff-label">Shortened ✏</div><p>{d.shortenedBullet}</p></div>
+                  </div>
+                  {d.reason && <p className="de-emphasis-reason">{d.reason}</p>}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+        <div className="swaps-sidebar"><div className="card summary-card">{error && <ErrorBanner message={error} onDismiss={onDismissError} />}<div className="card-title">Summary</div><div className="summary-rows"><div className="summary-row"><span>Swaps</span><span className="summary-val green">{approved}</span></div><div className="summary-row"><span>Shortened</span><span className="summary-val green">{approvedDe}</span></div><div className="summary-row"><span>Skipped</span><span className="summary-val muted">{(manifest.swaps.length - approved) + (manifest.deEmphasis.length - approvedDe)}</span></div></div>{manifest.atsKeywordGaps.length > 0 && (<><div className="card-title" style={{ marginTop: 16 }}>ATS Gaps</div><div className="tag-cloud">{manifest.atsKeywordGaps.map((k) => <span key={k} className="tag tag-yellow">{k}</span>)}</div></>)}<button className="btn-accent full-w" style={{ marginTop: 20 }} onClick={onApply} disabled={totalApproved === 0}>Apply {totalApproved} Change{totalApproved !== 1 ? "s" : ""} & Download →</button></div></div>
       </div>
     </div>
   );
