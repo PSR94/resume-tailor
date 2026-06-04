@@ -13,8 +13,14 @@ export function clearSession() {
   localStorage.removeItem(KEY);
 }
 
+// resumeBase64 is excluded from persistence — DOCX files can exceed the ~5 MB
+// localStorage quota and the failure is silent. resumeText is enough to restore
+// session state; the user re-uploads the file only if they refresh.
 export function saveProfile(data: object) {
-  try { localStorage.setItem(PROFILE_KEY, JSON.stringify(data)); } catch {}
+  try {
+    const { resumeBase64: _omit, ...safe } = data as Record<string, unknown>;
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(safe));
+  } catch {}
 }
 
 export function loadProfile(): Record<string, unknown> {

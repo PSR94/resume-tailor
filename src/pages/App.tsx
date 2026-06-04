@@ -12,13 +12,14 @@ type Step = "upload" | "jd" | "scoring-prompt" | "scoring-paste" | "swap-prompt"
 async function readApiError(response: Response): Promise<string> {
   const fallback = `Request failed with status ${response.status}.`;
   try {
-    const data = await response.json();
+    const text = await response.text();
+    if (!text.trim()) return fallback;
+    const data = JSON.parse(text);
     if (typeof data.detail === "string" && data.detail.trim()) return data.detail;
     if (Array.isArray(data.detail)) return data.detail.map((item) => item.msg ?? JSON.stringify(item)).join("; ");
     return fallback;
   } catch {
-    const text = await response.text().catch(() => "");
-    return text.trim() || fallback;
+    return fallback;
   }
 }
 
@@ -36,6 +37,7 @@ export default function App() {
   const [applyError, setApplyError] = useState("");
   const [copied, setCopied] = useState(false);
   const [serverOk, setServerOk] = useState<boolean | null>(null);
+  const [needsReupload, setNeedsReupload] = useState(false);
 
   function persist(patch: Record<string, unknown>) { sessionRef.current = { ...sessionRef.current, ...patch }; saveSession(sessionRef.current); }
   const setStep = (s: Step) => { setStepRaw(s); persist({ step: s }); setPasteValue(""); setParseError(""); setUploadError(""); setApplyError(""); setCopied(false); };
@@ -53,7 +55,12 @@ export default function App() {
     if (session.scoring) { setScoringRaw(session.scoring); sessionRef.current.scoring = session.scoring; }
     if (session.manifest) { setManifestRaw(session.manifest as Manifest); sessionRef.current.manifest = session.manifest; }
     const s = session.step as Step | undefined;
-    if (s && prof.resumeText) { setStepRaw(s); sessionRef.current.step = s; } else if (prof.resumeText) setStepRaw("jd");
+    if (s && prof.resumeText) {
+      setStepRaw(s);
+      sessionRef.current.step = s;
+      // resumeBase64 is not persisted — flag if session was mid-flow so user knows to re-upload
+      if (s !== "upload" && s !== "jd" && !prof.resumeBase64) setNeedsReupload(true);
+    } else if (prof.resumeText) setStepRaw("jd");
     checkServer();
   }, []);
 
@@ -71,6 +78,7 @@ export default function App() {
         const data = await res.json();
         const update = { resumeFileName: file.name, resumeBase64: base64, resumeText: data.text };
         setProfile((p) => { const n = { ...p, ...update }; saveProfile(n); return n; });
+        setNeedsReupload(false);
         setStep("jd");
       } catch {
         setServerOk(false);
@@ -103,6 +111,10 @@ export default function App() {
   async function handleApplySwaps() {
     if (!manifest) return;
     setApplyError("");
+    if (!profile.resumeBase64) {
+      setApplyError("Resume file not loaded. Please re-upload your DOCX — it is not stored between page refreshes.");
+      return;
+    }
     try {
       const approved = { ...manifest, swaps: manifest.swaps.filter((s) => s.approved).map((s) => ({ ...s, newBullet: s.userEdited ?? s.newBullet })) };
       const res = await fetch("http://localhost:7842/apply-swaps", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume_base64: profile.resumeBase64, manifest: approved }) });
@@ -132,6 +144,12 @@ export default function App() {
         {step === "swap-prompt" && scoring && <ScoringPreviewStep scoring={scoring} swapPrompt={swapPrompt} copied={copied} onCopy={() => copyPrompt(swapPrompt)} onNext={() => setStep("swap-paste")} onBack={() => setStep("scoring-paste")} />}
         {step === "swap-paste" && <PasteStep stepNumber={4} title="Paste ChatGPT's improvement response" description='Paste the JSON response. It should start with { "swaps": ...' placeholder={'{\n  "swaps": [...],\n  "skillsToConfirm": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteSwaps} onBack={() => setStep("swap-prompt")} submitLabel="Parse Swaps →" />}
         {step === "confirm-skills" && manifest && <ConfirmSkillsStep manifest={manifest} onConfirm={(i, v) => setManifest((m) => { if (!m) return m; const sc = [...m.skillsToConfirm]; sc[i] = { ...sc[i], confirmed: v }; return { ...m, skillsToConfirm: sc }; })} onDone={() => { setManifest((m) => { if (!m) return m; const denied = m.skillsToConfirm.filter((s) => s.confirmed === false).map((s) => s.skill.toLowerCase()); return { ...m, swaps: m.swaps.filter((s) => !s.jdSkillsAddressed.some((sk) => denied.includes(sk.toLowerCase()))) }; }); setStep("swaps"); }} onBack={() => setStep("swap-paste")} />}
+        {needsReupload && step !== "upload" && step !== "jd" && step !== "done" && (
+          <div className="app-error" role="alert" style={{ margin: "0 0 12px" }}>
+            <span>Session restored — please re-upload your DOCX to apply swaps (the file is not stored between sessions).</span>
+            <button type="button" aria-label="Dismiss" onClick={() => setNeedsReupload(false)}>×</button>
+          </div>
+        )}
         {step === "swaps" && manifest && <SwapsStep manifest={manifest} error={applyError} onDismissError={() => setApplyError("")} onToggle={(id) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, approved: !s.approved } : s) } : m)} onEdit={(id, t) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, userEdited: t } : s) } : m)} onApply={handleApplySwaps} onBack={() => setStep("swap-paste")} />}
         {step === "done" && <DoneStep onReset={() => { clearSession(); setJdTextRaw(""); setScoringRaw(null); setManifestRaw(null); setStepRaw("jd"); }} />}
       </main>
@@ -202,7 +220,7 @@ function PromptStep({ stepNumber, title, description, prompt, copied, onCopy, on
     <div className="panel">
       <div className="panel-header"><div><div className="step-badge">Step {stepNumber} of 4</div><h1 className="panel-title">{title}</h1><p className="panel-sub">{description}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
       <div className="chatgpt-guide">
-        {[{ n: "1", t: "Copy the prompt below", d: <p>Click "Copy Prompt" to copy everything to your clipboard.</p> }, { n: "2", t: "Open ChatGPT", d: <a href="https://chat.openai.com" target="_blank" rel="noreferrer" className="open-chatgpt-btn">Open ChatGPT in new tab →</a> }, { n: "3", t: "Paste and send", d: <p>Paste (Cmd+V / Ctrl+V) and hit Enter. Wait for the full JSON response.</p> }, { n: "4", t: "Come back here", d: <p>Click "I have the response" below and paste ChatGPT's reply on the next screen.</p> }].map((g) => (<div key={g.n} className="guide-step"><div className="guide-num">{g.n}</div><div><b>{g.t}</b>{g.d}</div></div>))}
+        {[{ n: "1", t: "Copy the prompt below", d: <p>Click "Copy Prompt" to copy everything to your clipboard.</p> }, { n: "2", t: "Open ChatGPT", d: <a href="https://chatgpt.com" target="_blank" rel="noreferrer" className="open-chatgpt-btn">Open ChatGPT in new tab →</a> }, { n: "3", t: "Paste and send", d: <p>Paste (Cmd+V / Ctrl+V) and hit Enter. Wait for the full JSON response.</p> }, { n: "4", t: "Come back here", d: <p>Click "I have the response" below and paste ChatGPT's reply on the next screen.</p> }].map((g) => (<div key={g.n} className="guide-step"><div className="guide-num">{g.n}</div><div><b>{g.t}</b>{g.d}</div></div>))}
       </div>
       <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Prompt for ChatGPT</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{prompt.slice(0, 500)}…</pre><p className="prompt-length">{prompt.length.toLocaleString()} characters total</p></div>
       <button className="btn-accent btn-lg full-w" onClick={onNext}>I have the response →</button>
@@ -232,7 +250,7 @@ function ScoringPreviewStep({ scoring, swapPrompt, copied, onCopy, onNext, onBac
       <div className="skills-row">{(s.keySkillsMissing as string[] ?? []).slice(0, 5).map((sk) => <span key={sk} className="tag tag-red">{sk}</span>)}{(s.keySkillsFound as string[] ?? []).slice(0, 4).map((sk) => <span key={sk} className="tag tag-green">{sk}</span>)}</div>
       <div className="divider-label">Now send a second prompt to generate improvements →</div>
       <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Improvement Prompt for ChatGPT</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{swapPrompt.slice(0, 400)}…</pre><p className="prompt-length">{swapPrompt.length.toLocaleString()} characters</p></div>
-      <div className="chatgpt-quick-guide"><span>1. Copy prompt above</span><span>→</span><a href="https://chat.openai.com" target="_blank" rel="noreferrer">2. Paste into ChatGPT →</a><span>→</span><span>3. Click below when done</span></div>
+      <div className="chatgpt-quick-guide"><span>1. Copy prompt above</span><span>→</span><a href="https://chatgpt.com" target="_blank" rel="noreferrer">2. Paste into ChatGPT →</a><span>→</span><span>3. Click below when done</span></div>
       <button className="btn-accent btn-lg full-w" onClick={onNext}>I have the response →</button>
     </div>
   );
@@ -240,10 +258,14 @@ function ScoringPreviewStep({ scoring, swapPrompt, copied, onCopy, onNext, onBac
 
 function ConfirmSkillsStep({ manifest, onConfirm, onDone, onBack }: { manifest: Manifest; onConfirm: (i: number, v: boolean) => void; onDone: () => void; onBack: () => void }) {
   const allAnswered = manifest.skillsToConfirm.every((s) => s.confirmed !== null);
+  const deniedSkills = manifest.skillsToConfirm.filter((s) => s.confirmed === false).map((s) => s.skill.toLowerCase());
+  const swapsRemaining = manifest.swaps.filter((s) => !s.jdSkillsAddressed.some((sk) => deniedSkills.includes(sk.toLowerCase()))).length;
+  const willBeEmpty = allAnswered && swapsRemaining === 0;
   return (
     <div className="panel">
       <div className="panel-header"><div><h1 className="panel-title">Confirm Skills</h1><p className="panel-sub">Only approve what you can genuinely defend in an interview.</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
       <div className="confirm-list">{manifest.skillsToConfirm.map((s, i) => (<div key={i} className="confirm-card"><div className="confirm-skill-name">{s.skill}</div><p className="confirm-context">{s.context}</p><div className="confirm-btns"><button className={`confirm-btn yes ${s.confirmed === true ? "active" : ""}`} onClick={() => onConfirm(i, true)}>✓ Yes, I have this</button><button className={`confirm-btn no ${s.confirmed === false ? "active" : ""}`} onClick={() => onConfirm(i, false)}>✗ Skip it</button></div></div>))}</div>
+      {willBeEmpty && <div className="warn-box" style={{ marginTop: 12 }}>⚠ All proposed swaps require skills you've skipped — there will be nothing to review. Go back to paste a new response, or accept at least one skill.</div>}
       <button className="btn-accent btn-lg full-w" onClick={onDone} disabled={!allAnswered}>Review Swaps →</button>
     </div>
   );
@@ -252,11 +274,13 @@ function ConfirmSkillsStep({ manifest, onConfirm, onDone, onBack }: { manifest: 
 function SwapsStep({ manifest, error, onDismissError, onToggle, onEdit, onApply, onBack }: { manifest: Manifest; error: string; onDismissError: () => void; onToggle: (id: string) => void; onEdit: (id: string, t: string) => void; onApply: () => void; onBack: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const approved = manifest.swaps.filter((s) => s.approved).length;
+  const noSwaps = manifest.swaps.length === 0;
   return (
     <div className="panel">
-      <div className="panel-header"><div><h1 className="panel-title">Review Swaps</h1><p className="panel-sub">{approved} of {manifest.swaps.length} approved. Toggle off any to skip. Click green bullet to edit.</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
+      <div className="panel-header"><div><h1 className="panel-title">Review Swaps</h1><p className="panel-sub">{noSwaps ? "No swaps to apply." : `${approved} of ${manifest.swaps.length} approved. Toggle off any to skip. Click green bullet to edit.`}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
+      {noSwaps && <div className="warn-box">⚠ No swaps remain — all were removed because you skipped the skills they required. Go back and paste a new response, or accept at least one skill on the previous step.</div>}
       <div className="swaps-layout">
-        <div className="swaps-list">{manifest.swaps.map((swap) => (<div key={swap.id} className={`swap-card ${swap.approved ? "approved" : "rejected"}`}><div className="swap-card-header"><div className="swap-meta"><span className="swap-section-tag">{swap.section}</span><span className="swap-skills-tag">{swap.jdSkillsAddressed.join(", ")}</span></div><label className="toggle-switch"><input type="checkbox" checked={swap.approved} onChange={() => onToggle(swap.id)} /><span className="toggle-track"><span className="toggle-thumb" /></span></label></div><div className="swap-diff-grid"><div className="diff-block old"><div className="diff-label">Remove · {swap.originalScore}/10</div><p>{swap.originalBullet}</p></div><div className="diff-arrow">→</div><div className="diff-block new" onClick={() => setEditingId(swap.id)} title="Click to edit"><div className="diff-label">Add · {swap.newScore}/10 ✏</div>{editingId === swap.id ? <textarea className="inline-edit" defaultValue={swap.userEdited ?? swap.newBullet} autoFocus onBlur={(e) => { onEdit(swap.id, e.target.value); setEditingId(null); }} /> : <p>{swap.userEdited ?? swap.newBullet}</p>}</div></div></div>))}</div>
+        <div className="swaps-list">{manifest.swaps.map((swap) => (<div key={swap.id} className={`swap-card ${swap.approved ? "approved" : "rejected"}`}><div className="swap-card-header"><div className="swap-meta"><span className="swap-section-tag">{swap.section}</span><span className="swap-skills-tag">{swap.jdSkillsAddressed.join(", ")}</span></div><label className="toggle-switch"><input type="checkbox" checked={swap.approved} onChange={() => onToggle(swap.id)} /><span className="toggle-track"><span className="toggle-thumb" /></span></label></div><div className="swap-diff-grid"><div className="diff-block old"><div className="diff-label">Remove · {swap.originalScore}/10</div><p>{swap.originalBullet}</p></div><div className="diff-arrow">→</div><div className="diff-block new" onClick={() => setEditingId(swap.id)} title="Click to edit"><div className="diff-label">Add · {swap.newScore}/10 ✏</div>{editingId === swap.id ? <textarea className="inline-edit" value={swap.userEdited ?? swap.newBullet} autoFocus onChange={(e) => onEdit(swap.id, e.target.value)} onBlur={() => setEditingId(null)} /> : <p>{swap.userEdited ?? swap.newBullet}</p>}</div></div></div>))}</div>
         <div className="swaps-sidebar"><div className="card summary-card">{error && <ErrorBanner message={error} onDismiss={onDismissError} />}<div className="card-title">Summary</div><div className="summary-rows"><div className="summary-row"><span>Approved</span><span className="summary-val green">{approved}</span></div><div className="summary-row"><span>Skipped</span><span className="summary-val muted">{manifest.swaps.length - approved}</span></div></div>{manifest.atsKeywordGaps.length > 0 && (<><div className="card-title" style={{ marginTop: 16 }}>ATS Gaps</div><div className="tag-cloud">{manifest.atsKeywordGaps.map((k) => <span key={k} className="tag tag-yellow">{k}</span>)}</div></>)}<button className="btn-accent full-w" style={{ marginTop: 20 }} onClick={onApply} disabled={approved === 0}>Apply {approved} Swap{approved !== 1 ? "s" : ""} & Download →</button></div></div>
       </div>
     </div>

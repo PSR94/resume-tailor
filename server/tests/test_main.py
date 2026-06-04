@@ -118,8 +118,40 @@ def test_apply_swaps_with_one_approved_swap_replaces_target_bullet():
     data = response.json()
     assert data["docx_base64"]
     assert data["swaps_applied"] == 1
+    assert data["swaps_requested"] == 1
+    assert data["swaps_skipped"] == 0
     assert data["bullet_count_before"] == data["bullet_count_after"]
 
     returned_text = docx_text_from_base64(data["docx_base64"])
     assert REPLACEMENT_BULLET in returned_text
     assert ORIGINAL_BULLET not in returned_text
+
+
+def test_apply_swaps_rejects_unmatched_approved_swap():
+    response = client.post(
+        "/apply-swaps",
+        json={
+            "resume_base64": make_resume_base64(),
+            "manifest": {
+                "jobTitle": "Software Engineer",
+                "company": "Local Test",
+                "swaps": [
+                    {
+                        "id": "swap-missing",
+                        "action": "swap",
+                        "section": "EXPERIENCE",
+                        "roleIndex": 0,
+                        "bulletIndex": 99,
+                        "originalBullet": "This bullet is not in the resume.",
+                        "newBullet": REPLACEMENT_BULLET,
+                        "approved": True,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "1 approved swap(s) could not be applied" in detail
+    assert "swap-missing: target bullet not found" in detail

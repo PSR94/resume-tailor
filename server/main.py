@@ -23,7 +23,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from docx_engine import apply_swaps, count_bullets, extract_text
+from docx_engine import apply_swaps_with_report, count_bullets, extract_text
 
 app = FastAPI(title="Resume Tailor Server", version="1.0.0")
 
@@ -114,7 +114,14 @@ def apply_swaps_endpoint(req: ApplySwapsRequest):
         bullet_count_before = count_bullets(doc)
 
         approved_swaps = [s for s in req.manifest.swaps if s.get("approved", True)]
-        doc = apply_swaps(doc, approved_swaps)
+        doc, applied_swaps, skipped_swaps = apply_swaps_with_report(doc, approved_swaps)
+
+        if skipped_swaps:
+            skipped_summary = "; ".join(f"{s['id']}: {s['reason']}" for s in skipped_swaps)
+            raise HTTPException(
+                status_code=422,
+                detail=f"{len(skipped_swaps)} approved swap(s) could not be applied: {skipped_summary}. No DOCX was downloaded.",
+            )
 
         bullet_count_after = count_bullets(doc)
 
@@ -139,7 +146,9 @@ def apply_swaps_endpoint(req: ApplySwapsRequest):
         return {
             "docx_base64": result_base64,
             "filename": filename,
-            "swaps_applied": len(approved_swaps),
+            "swaps_requested": len(approved_swaps),
+            "swaps_applied": len(applied_swaps),
+            "swaps_skipped": 0,
             "bullet_count_before": bullet_count_before,
             "bullet_count_after": bullet_count_after,
         }

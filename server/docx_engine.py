@@ -11,7 +11,7 @@ Key improvement: bold vocabulary preservation.
 
 import copy
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from docx import Document
@@ -24,6 +24,7 @@ from docx.oxml import OxmlElement
 @dataclass
 class BulletPosition:
     para_index: int
+    para: object  # the Paragraph object — avoids re-indexing into doc.paragraphs
     section: str
     role_index: int
     bullet_index: int
@@ -48,10 +49,19 @@ def is_role_header(para) -> bool:
     text = para.text.strip()
     if not text or len(text) > 120:
         return False
+    # Must not be a list/bullet paragraph
+    if is_bullet(para):
+        return False
     runs = [r for r in para.runs if r.text.strip()]
     if not runs:
         return False
-    return all(r.bold for r in runs)
+    if not all(r.bold for r in runs):
+        return False
+    # Role headers typically contain a separator (|, ·, —, ,) or a year range,
+    # distinguishing them from standalone bolded bullet openers.
+    has_separator = bool(re.search(r"[|·•,—–-]", text))
+    has_year = bool(re.search(r"\b(19|20)\d{2}\b", text))
+    return has_separator or has_year
 
 
 def is_bullet(para) -> bool:
@@ -77,7 +87,7 @@ def build_bold_vocabulary(doc: Document) -> list[str]:
     Returns terms sorted by length descending so longer phrases match first.
     """
     vocab: set[str] = set()
-    for para in doc.paragraphs:
+    for para in iter_all_paragraphs(doc):
         for run in para.runs:
             term = run.text.strip()
             if run.bold and len(term) > 1:
@@ -275,8 +285,27 @@ def write_runs_with_bold(para_element, new_text: str, ref_rPr, vocab: list[str])
 
 # ── Section map ───────────────────────────────────────────────────────────────
 
+def iter_all_paragraphs(doc: Document):
+    """
+    Yield all paragraphs in document order, including those inside table cells.
+    python-docx's doc.paragraphs only returns top-level paragraphs and misses
+    table content entirely, which breaks section mapping for table-layout resumes.
+    """
+    from docx.text.paragraph import Paragraph as _Para
+    body = doc.element.body
+    for child in body:
+        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if tag == "p":
+            yield _Para(child, doc)
+        elif tag == "tbl":
+            for row in child.findall(".//" + qn("w:tr")):
+                for cell in row.findall(qn("w:tc")):
+                    for p_el in cell.findall(qn("w:p")):
+                        yield _Para(p_el, doc)
+
+
 def extract_text(doc: Document) -> str:
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    return "\n".join(p.text for p in iter_all_paragraphs(doc) if p.text.strip())
 
 
 def build_section_map(doc: Document) -> list[BulletPosition]:
@@ -285,7 +314,8 @@ def build_section_map(doc: Document) -> list[BulletPosition]:
     current_role = -1
     current_bullet = -1
 
-    for idx, para in enumerate(doc.paragraphs):
+    all_paras = list(iter_all_paragraphs(doc))
+    for idx, para in enumerate(all_paras):
         text = para.text.strip()
         if not text:
             continue
@@ -302,6 +332,7 @@ def build_section_map(doc: Document) -> list[BulletPosition]:
             current_bullet += 1
             positions.append(BulletPosition(
                 para_index=idx,
+                para=para,
                 section=current_section,
                 role_index=max(current_role, 0),
                 bullet_index=current_bullet,
@@ -312,17 +343,22 @@ def build_section_map(doc: Document) -> list[BulletPosition]:
 
 # ── Apply swaps ───────────────────────────────────────────────────────────────
 
-def apply_swaps(doc: Document, swaps: list[dict]) -> Document:
+def apply_swaps_with_report(doc: Document, swaps: list[dict]) -> tuple[Document, list[dict], list[dict]]:
+    applied: list[dict] = []
+    skipped: list[dict] = []
+
     if not swaps:
-        return doc
+        return doc, applied, skipped
 
     # Build bold vocabulary from the whole document before we start editing
     vocab = build_bold_vocabulary(doc)
 
     positions = build_section_map(doc)
 
-    for swap in swaps:
+    for idx, swap in enumerate(swaps):
+        swap_id = swap.get("id") or f"swap_{idx}"
         if swap.get("action") != "swap":
+            skipped.append({"id": swap_id, "reason": "unsupported action"})
             continue
 
         section = swap.get("section", "")
@@ -331,6 +367,7 @@ def apply_swaps(doc: Document, swaps: list[dict]) -> Document:
         new_text = swap.get("newBullet", swap.get("new_bullet", "")).strip()
 
         if not new_text:
+            skipped.append({"id": swap_id, "reason": "missing replacement bullet"})
             continue
 
         # Find target bullet
@@ -348,17 +385,24 @@ def apply_swaps(doc: Document, swaps: list[dict]) -> Document:
                     break
 
         if match is None:
+            skipped.append({"id": swap_id, "reason": "target bullet not found"})
             continue
 
-        target_para = doc.paragraphs[match.para_index]
+        target_para = match.para
         ref_rPr = _get_ref_rPr(target_para)
 
         write_runs_with_bold(target_para._p, new_text, ref_rPr, vocab)
+        applied.append({"id": swap_id})
 
         for p in positions:
             if p.para_index == match.para_index:
                 p.text = new_text
 
+    return doc, applied, skipped
+
+
+def apply_swaps(doc: Document, swaps: list[dict]) -> Document:
+    doc, _, _ = apply_swaps_with_report(doc, swaps)
     return doc
 
 
