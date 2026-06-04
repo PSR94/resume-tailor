@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildScoringPrompt, buildSwapPrompt } from "../lib/prompts";
 import { saveSession, loadSession, clearSession, saveProfile, loadProfile } from "../lib/storage";
-import { parseChatGPTJSON, validateScoringResponse, validateSwapResponse, type ScoringResponse, type SkillConfirm, type SwapItem, type DeEmphasisItem } from "../lib/validation";
+import { parseAIJSON, validateScoringResponse, validateSwapResponse, type ScoringResponse, type SkillConfirm, type SwapItem, type DeEmphasisItem } from "../lib/validation";
 import "../styles/app.css";
 
 interface Manifest { jobTitle: string; company: string; jdSummary: string; keySkillsFound: string[]; keySkillsMissing: string[]; atsKeywordGaps: string[]; swaps: SwapItem[]; deEmphasis: DeEmphasisItem[]; skillsToConfirm: SkillConfirm[]; }
@@ -23,6 +23,13 @@ async function readApiError(response: Response): Promise<string> {
   }
 }
 
+type AiProvider = "chatgpt" | "claude" | "other";
+const AI_CONFIG: Record<AiProvider, { name: string; url: string | null }> = {
+  chatgpt: { name: "ChatGPT", url: "https://chatgpt.com" },
+  claude:  { name: "Claude",  url: "https://claude.ai" },
+  other:   { name: "AI assistant", url: null },
+};
+
 export default function App() {
   const navigate = useNavigate();
   const sessionRef = useRef<Record<string, unknown>>({});
@@ -38,9 +45,11 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [serverOk, setServerOk] = useState<boolean | null>(null);
   const [needsReupload, setNeedsReupload] = useState(false);
+  const [aiProvider, setAiProviderRaw] = useState<AiProvider>("chatgpt");
 
   function persist(patch: Record<string, unknown>) { sessionRef.current = { ...sessionRef.current, ...patch }; saveSession(sessionRef.current); }
   const setStep = (s: Step) => { setStepRaw(s); persist({ step: s }); setPasteValue(""); setParseError(""); setUploadError(""); setApplyError(""); setCopied(false); };
+  const setAiProvider = (p: AiProvider) => { setAiProviderRaw(p); persist({ aiProvider: p }); };
   const setJdText = (t: string) => { setJdTextRaw(t); persist({ jdText: t }); };
   const setScoring = (d: unknown) => { setScoringRaw(d); persist({ scoring: d }); };
   const setManifest = useCallback((fn: Manifest | null | ((m: Manifest | null) => Manifest | null)) => {
@@ -54,6 +63,7 @@ export default function App() {
     if (session.jdText) { setJdTextRaw(session.jdText as string); sessionRef.current.jdText = session.jdText; }
     if (session.scoring) { setScoringRaw(session.scoring); sessionRef.current.scoring = session.scoring; }
     if (session.manifest) { setManifestRaw(session.manifest as Manifest); sessionRef.current.manifest = session.manifest; }
+    if (session.aiProvider && ["chatgpt", "claude", "other"].includes(session.aiProvider as string)) { setAiProviderRaw(session.aiProvider as AiProvider); sessionRef.current.aiProvider = session.aiProvider; }
     const s = session.step as Step | undefined;
     if (s && prof.resumeText) {
       setStepRaw(s);
@@ -93,7 +103,7 @@ export default function App() {
   function handlePasteScoring() {
     setParseError("");
     try {
-      const data = validateScoringResponse(parseChatGPTJSON(pasteValue));
+      const data = validateScoringResponse(parseAIJSON(pasteValue));
       setScoring(data); setStep("swap-prompt");
     } catch (e: unknown) { setParseError((e as Error).message); }
   }
@@ -101,7 +111,7 @@ export default function App() {
   function handlePasteSwaps() {
     setParseError("");
     try {
-      const data = validateSwapResponse(parseChatGPTJSON(pasteValue));
+      const data = validateSwapResponse(parseAIJSON(pasteValue));
       const s = scoring as ScoringResponse;
       const m: Manifest = { jobTitle: s.jobTitle, company: s.company, jdSummary: s.jdSummary, keySkillsFound: s.keySkillsFound, keySkillsMissing: s.keySkillsMissing, atsKeywordGaps: s.atsKeywordGaps, swaps: data.swaps, deEmphasis: data.deEmphasis, skillsToConfirm: data.skillsToConfirm };
       setManifest(m); setStep(m.skillsToConfirm.length > 0 ? "confirm-skills" : "swaps");
@@ -140,11 +150,11 @@ export default function App() {
       <AppNav onHome={() => navigate("/")} step={step} serverOk={serverOk} />
       <main className="app-main">
         {step === "upload" && <UploadStep serverOk={serverOk} error={uploadError} onDismissError={() => setUploadError("")} onUpload={handleResumeUpload} onCheckServer={checkServer} />}
-        {step === "jd" && <JDStep profile={profile} jdText={jdText} onJdChange={setJdText} onNext={() => setStep("scoring-prompt")} onBack={() => setStep("upload")} />}
-        {step === "scoring-prompt" && <PromptStep stepNumber={1} title="Copy this prompt into ChatGPT" description="Asks ChatGPT to score every bullet against the JD. Open ChatGPT, paste it, wait for the response, then come back." prompt={scoringPrompt} copied={copied} onCopy={() => copyPrompt(scoringPrompt)} onNext={() => setStep("scoring-paste")} onBack={() => setStep("jd")} />}
-        {step === "scoring-paste" && <PasteStep stepNumber={2} title="Paste ChatGPT's response" description='Copy the entire JSON response from ChatGPT and paste it below. It should start with { "jobTitle": ...' placeholder={'{\n  "jobTitle": "...",\n  "bullets": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteScoring} onBack={() => setStep("scoring-prompt")} submitLabel="Parse Scores →" />}
-        {step === "swap-prompt" && scoring && <ScoringPreviewStep scoring={scoring} swapPrompt={swapPrompt} copied={copied} onCopy={() => copyPrompt(swapPrompt)} onNext={() => setStep("swap-paste")} onBack={() => setStep("scoring-paste")} />}
-        {step === "swap-paste" && <PasteStep stepNumber={4} title="Paste ChatGPT's improvement response" description='Paste the JSON response. It should start with { "swaps": ...' placeholder={'{\n  "swaps": [...],\n  "skillsToConfirm": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteSwaps} onBack={() => setStep("swap-prompt")} submitLabel="Parse Swaps →" />}
+        {step === "jd" && <JDStep profile={profile} jdText={jdText} onJdChange={setJdText} aiProvider={aiProvider} onAiProviderChange={setAiProvider} onNext={() => setStep("scoring-prompt")} onBack={() => setStep("upload")} />}
+        {step === "scoring-prompt" && <PromptStep stepNumber={1} title={`Copy this prompt into ${AI_CONFIG[aiProvider].name}`} description={`Asks ${AI_CONFIG[aiProvider].name} to score every bullet against the JD. Open ${AI_CONFIG[aiProvider].name}, paste it, wait for the response, then come back.`} aiProvider={aiProvider} prompt={scoringPrompt} copied={copied} onCopy={() => copyPrompt(scoringPrompt)} onNext={() => setStep("scoring-paste")} onBack={() => setStep("jd")} />}
+        {step === "scoring-paste" && <PasteStep stepNumber={2} title={`Paste ${AI_CONFIG[aiProvider].name}'s response`} description={`Copy the entire JSON response from ${AI_CONFIG[aiProvider].name} and paste it below. It should start with { "jobTitle": ...`} placeholder={'{\n  "jobTitle": "...",\n  "bullets": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteScoring} onBack={() => setStep("scoring-prompt")} submitLabel="Parse Scores →" aiName={AI_CONFIG[aiProvider].name} />}
+        {step === "swap-prompt" && scoring && <ScoringPreviewStep scoring={scoring} swapPrompt={swapPrompt} aiProvider={aiProvider} copied={copied} onCopy={() => copyPrompt(swapPrompt)} onNext={() => setStep("swap-paste")} onBack={() => setStep("scoring-paste")} />}
+        {step === "swap-paste" && <PasteStep stepNumber={4} title={`Paste ${AI_CONFIG[aiProvider].name}'s improvement response`} description='Paste the JSON response. It should start with { "swaps": ...' placeholder={'{\n  "swaps": [...],\n  "skillsToConfirm": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteSwaps} onBack={() => setStep("swap-prompt")} submitLabel="Parse Swaps →" aiName={AI_CONFIG[aiProvider].name} />
         {step === "confirm-skills" && manifest && <ConfirmSkillsStep manifest={manifest} onConfirm={(i, v) => setManifest((m) => { if (!m) return m; const sc = [...m.skillsToConfirm]; sc[i] = { ...sc[i], confirmed: v }; return { ...m, skillsToConfirm: sc }; })} onDone={() => { setManifest((m) => { if (!m) return m; const denied = m.skillsToConfirm.filter((s) => s.confirmed === false).map((s) => s.skill.toLowerCase()); return { ...m, swaps: m.swaps.filter((s) => !s.jdSkillsAddressed.some((sk) => denied.includes(sk.toLowerCase()))) }; }); setStep("swaps"); }} onBack={() => setStep("swap-paste")} />}
         {needsReupload && step !== "upload" && step !== "jd" && step !== "done" && (
           <div className="app-error" role="alert" style={{ margin: "0 0 12px" }}>
@@ -198,7 +208,7 @@ function UploadStep({ serverOk, error, onDismissError, onUpload, onCheckServer }
       {error && <ErrorBanner message={error} onDismiss={onDismissError} />}
       <label className="upload-zone"><input type="file" accept=".docx" onChange={onUpload} /><span className="upload-zone-icon">⬆</span><span className="upload-zone-label">Click to upload your DOCX resume</span><span className="upload-zone-hint">DOCX only · stays on your device</span></label>
       <div className="how-it-works-mini">
-        {["Upload resume", "Paste JD", "Copy → ChatGPT", "Paste back", "Download DOCX"].map((s, i, arr) => (
+        {["Upload resume", "Paste JD", "Copy → AI", "Paste back", "Download DOCX"].map((s, i, arr) => (
           <React.Fragment key={s}><div className="how-step"><span>{i + 1}</span>{s}</div>{i < arr.length - 1 && <div className="how-sep">→</div>}</React.Fragment>
         ))}
       </div>
@@ -206,42 +216,48 @@ function UploadStep({ serverOk, error, onDismissError, onUpload, onCheckServer }
   );
 }
 
-function JDStep({ profile, jdText, onJdChange, onNext, onBack }: { profile: Partial<Profile>; jdText: string; onJdChange: (t: string) => void; onNext: () => void; onBack: () => void }) {
+function JDStep({ profile, jdText, onJdChange, aiProvider, onAiProviderChange, onNext, onBack }: { profile: Partial<Profile>; jdText: string; onJdChange: (t: string) => void; aiProvider: AiProvider; onAiProviderChange: (p: AiProvider) => void; onNext: () => void; onBack: () => void }) {
   return (
     <div className="panel">
       <div className="panel-header"><div><h1 className="panel-title">Paste the Job Description</h1><p className="panel-sub">Copy the full JD — summary, requirements, responsibilities.</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
       <div className="resume-loaded-bar"><span>📄</span><span>{profile.resumeFileName}</span><span className="resume-loaded-ok">✓ Loaded</span></div>
+      <div className="ai-picker"><span className="ai-picker-label">Which AI will you use?</span><div className="ai-picker-options">{(["chatgpt", "claude", "other"] as AiProvider[]).map((p) => (<button key={p} className={`ai-pill ${aiProvider === p ? "active" : ""}`} onClick={() => onAiProviderChange(p)}>{AI_CONFIG[p].name}</button>))}</div></div>
       <div className="jd-area"><div className="jd-toolbar"><span className="card-title">Job Description</span><span className="char-count">{jdText.length} chars</span></div><textarea className="jd-textarea" value={jdText} onChange={(e) => onJdChange(e.target.value)} placeholder="Paste the full job description here..." /></div>
-      <button className="btn-accent btn-lg full-w" onClick={onNext} disabled={!jdText.trim()}>Generate ChatGPT Prompt →</button>
+      <button className="btn-accent btn-lg full-w" onClick={onNext} disabled={!jdText.trim()}>Generate {AI_CONFIG[aiProvider].name} Prompt →</button>
     </div>
   );
 }
 
-function PromptStep({ stepNumber, title, description, prompt, copied, onCopy, onNext, onBack }: { stepNumber: number; title: string; description: string; prompt: string; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
+function PromptStep({ stepNumber, title, description, aiProvider, prompt, copied, onCopy, onNext, onBack }: { stepNumber: number; title: string; description: string; aiProvider: AiProvider; prompt: string; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
+  const ai = AI_CONFIG[aiProvider];
+  const openStep = ai.url
+    ? { n: "2", t: `Open ${ai.name}`, d: <a href={ai.url} target="_blank" rel="noreferrer" className="open-chatgpt-btn">Open {ai.name} in new tab →</a> }
+    : { n: "2", t: "Open your AI assistant", d: <p>Open your preferred AI assistant in another tab.</p> };
   return (
     <div className="panel">
       <div className="panel-header"><div><div className="step-badge">Step {stepNumber} of 4</div><h1 className="panel-title">{title}</h1><p className="panel-sub">{description}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
       <div className="chatgpt-guide">
-        {[{ n: "1", t: "Copy the prompt below", d: <p>Click "Copy Prompt" to copy everything to your clipboard.</p> }, { n: "2", t: "Open ChatGPT", d: <a href="https://chatgpt.com" target="_blank" rel="noreferrer" className="open-chatgpt-btn">Open ChatGPT in new tab →</a> }, { n: "3", t: "Paste and send", d: <p>Paste (Cmd+V / Ctrl+V) and hit Enter. Wait for the full JSON response.</p> }, { n: "4", t: "Come back here", d: <p>Click "I have the response" below and paste ChatGPT's reply on the next screen.</p> }].map((g) => (<div key={g.n} className="guide-step"><div className="guide-num">{g.n}</div><div><b>{g.t}</b>{g.d}</div></div>))}
+        {[{ n: "1", t: "Copy the prompt below", d: <p>Click "Copy Prompt" to copy everything to your clipboard.</p> }, openStep, { n: "3", t: "Paste and send", d: <p>Paste (Cmd+V / Ctrl+V) and hit Enter. Wait for the full JSON response.</p> }, { n: "4", t: "Come back here", d: <p>Click "I have the response" below and paste the reply on the next screen.</p> }].map((g) => (<div key={g.n} className="guide-step"><div className="guide-num">{g.n}</div><div><b>{g.t}</b>{g.d}</div></div>))}
       </div>
-      <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Prompt for ChatGPT</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{prompt.slice(0, 500)}…</pre><p className="prompt-length">{prompt.length.toLocaleString()} characters total</p></div>
+      <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Prompt for {ai.name}</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{prompt.slice(0, 500)}…</pre><p className="prompt-length">{prompt.length.toLocaleString()} characters total</p></div>
       <button className="btn-accent btn-lg full-w" onClick={onNext}>I have the response →</button>
     </div>
   );
 }
 
-function PasteStep({ stepNumber, title, description, placeholder, value, onChange, error, onSubmit, onBack, submitLabel }: { stepNumber: number; title: string; description: string; placeholder: string; value: string; onChange: (t: string) => void; error: string; onSubmit: () => void; onBack: () => void; submitLabel: string }) {
+function PasteStep({ stepNumber, title, description, placeholder, value, onChange, error, onSubmit, onBack, submitLabel, aiName }: { stepNumber: number; title: string; description: string; placeholder: string; value: string; onChange: (t: string) => void; error: string; onSubmit: () => void; onBack: () => void; submitLabel: string; aiName: string }) {
   return (
     <div className="panel">
       <div className="panel-header"><div><div className="step-badge">Step {stepNumber} of 4</div><h1 className="panel-title">{title}</h1><p className="panel-sub">{description}</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
-      <div className="paste-area"><div className="paste-header"><span className="card-title">ChatGPT Response</span>{value && <button className="btn-ghost-sm" onClick={() => onChange("")}>Clear</button>}</div><textarea className={`paste-textarea ${error ? "has-error" : ""}`} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} spellCheck={false} />{error && <div className="parse-error">⚠ {error}</div>}</div>
+      <div className="paste-area"><div className="paste-header"><span className="card-title">{aiName} Response</span>{value && <button className="btn-ghost-sm" onClick={() => onChange("")}>Clear</button>}</div><textarea className={`paste-textarea ${error ? "has-error" : ""}`} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} spellCheck={false} />{error && <div className="parse-error">⚠ {error}</div>}</div>
       <button className="btn-accent btn-lg full-w" onClick={onSubmit} disabled={!value.trim()}>{submitLabel}</button>
     </div>
   );
 }
 
-function ScoringPreviewStep({ scoring, swapPrompt, copied, onCopy, onNext, onBack }: { scoring: unknown; swapPrompt: string; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
+function ScoringPreviewStep({ scoring, swapPrompt, aiProvider, copied, onCopy, onNext, onBack }: { scoring: unknown; swapPrompt: string; aiProvider: AiProvider; copied: boolean; onCopy: () => void; onNext: () => void; onBack: () => void }) {
   const s = scoring as Record<string, unknown>;
+  const ai = AI_CONFIG[aiProvider];
   const bullets = (s.bullets as Array<Record<string, unknown>>) ?? [];
   const sorted = [...bullets].sort((a, b) => (a.score as number) - (b.score as number));
   const swapCount = sorted.filter((b) => (b.score as number) < 5).length;
@@ -251,8 +267,8 @@ function ScoringPreviewStep({ scoring, swapPrompt, copied, onCopy, onNext, onBac
       <div className="scores-quick">{sorted.slice(0, 6).map((b, i) => { const score = b.score as number; return (<div key={i} className={`score-quick-row ${score < 5 ? "low" : score < 7 ? "mid" : "high"}`}><div className="score-circle">{score}</div><p className="score-quick-text">{(b.bullet as string).slice(0, 90)}{(b.bullet as string).length > 90 ? "…" : ""}</p></div>); })}{sorted.length > 6 && <p className="scores-more">+{sorted.length - 6} more bullets scored</p>}</div>
       <div className="skills-row">{(s.keySkillsMissing as string[] ?? []).slice(0, 5).map((sk) => <span key={sk} className="tag tag-red">{sk}</span>)}{(s.keySkillsFound as string[] ?? []).slice(0, 4).map((sk) => <span key={sk} className="tag tag-green">{sk}</span>)}</div>
       <div className="divider-label">Now send a second prompt to generate improvements →</div>
-      <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Improvement Prompt for ChatGPT</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{swapPrompt.slice(0, 400)}…</pre><p className="prompt-length">{swapPrompt.length.toLocaleString()} characters</p></div>
-      <div className="chatgpt-quick-guide"><span>1. Copy prompt above</span><span>→</span><a href="https://chatgpt.com" target="_blank" rel="noreferrer">2. Paste into ChatGPT →</a><span>→</span><span>3. Click below when done</span></div>
+      <div className="prompt-box"><div className="prompt-box-header"><span className="card-title">Improvement Prompt for {ai.name}</span><button className={`copy-btn ${copied ? "copied" : ""}`} onClick={onCopy}>{copied ? "✓ Copied!" : "Copy Prompt"}</button></div><pre className="prompt-text">{swapPrompt.slice(0, 400)}…</pre><p className="prompt-length">{swapPrompt.length.toLocaleString()} characters</p></div>
+      <div className="chatgpt-quick-guide"><span>1. Copy prompt above</span><span>→</span>{ai.url ? <a href={ai.url} target="_blank" rel="noreferrer">2. Paste into {ai.name} →</a> : <span>2. Paste into your AI assistant</span>}<span>→</span><span>3. Click below when done</span></div>
       <button className="btn-accent btn-lg full-w" onClick={onNext}>I have the response →</button>
     </div>
   );

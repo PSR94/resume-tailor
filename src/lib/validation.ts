@@ -55,12 +55,12 @@ export interface SwapResponse {
   skillsToConfirm: SkillConfirm[];
 }
 
-export function parseChatGPTJSON(raw: string): unknown {
+export function parseAIJSON(raw: string): unknown {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   try {
     return JSON.parse((fenced ? fenced[1] : raw).trim());
   } catch {
-    throw new Error("Invalid JSON. Please copy the full JSON response from ChatGPT with no extra text.");
+    throw new Error("Invalid JSON. Please copy the full JSON response from the AI assistant with no extra text.");
   }
 }
 
@@ -93,8 +93,8 @@ function stringArray(value: unknown): string[] {
 }
 
 export function validateScoringResponse(raw: unknown): ScoringResponse {
-  if (!isRecord(raw)) throw new Error("Please paste a valid scoring JSON object from ChatGPT.");
-  if (!Array.isArray(raw.bullets)) throw new Error("Missing bullets array. Please copy the full scoring JSON from ChatGPT.");
+  if (!isRecord(raw)) throw new Error("Please paste a valid scoring JSON object from the AI assistant.");
+  if (!Array.isArray(raw.bullets)) throw new Error("Missing bullets array. Please copy the full scoring JSON from the AI assistant.");
 
   return {
     jobTitle: optionalString(raw.jobTitle),
@@ -119,8 +119,8 @@ export function validateScoringResponse(raw: unknown): ScoringResponse {
 }
 
 export function validateSwapResponse(raw: unknown): SwapResponse {
-  if (!isRecord(raw)) throw new Error("Please paste a valid swap JSON object from ChatGPT.");
-  if (!Array.isArray(raw.swaps)) throw new Error("Missing swaps array. Please copy the full swap JSON from ChatGPT.");
+  if (!isRecord(raw)) throw new Error("Please paste a valid swap JSON object from the AI assistant.");
+  if (!Array.isArray(raw.swaps)) throw new Error("Missing swaps array. Please copy the full swap JSON from the AI assistant.");
 
   return {
     swaps: raw.swaps.map((item, index) => {

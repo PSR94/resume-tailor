@@ -1296,6 +1296,36 @@
   background: var(--border);
 }
 
+/* ── AI provider picker ────────────────────── */
+.ai-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.ai-picker-label {
+  font-size: 13px;
+  color: var(--text2);
+  white-space: nowrap;
+}
+.ai-picker-options {
+  display: flex;
+  gap: 8px;
+}
+.ai-pill {
+  padding: 5px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ai-pill:hover { border-color: var(--accent); color: var(--accent); }
+.ai-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
 /* ── De-emphasis section ───────────────────── */
 .section-divider {
   display: flex;
