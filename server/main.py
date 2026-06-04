@@ -9,13 +9,16 @@ Endpoints:
 """
 
 import base64
+import binascii
 import io
 import re
+import zipfile
 from datetime import datetime
 from typing import Any
 
 import uvicorn
 from docx import Document
+from docx.opc.exceptions import PackageNotFoundError
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -24,10 +27,16 @@ from docx_engine import apply_swaps, count_bullets, extract_text
 
 app = FastAPI(title="Resume Tailor Server", version="1.0.0")
 
-# Allow calls from the Chrome extension
+ALLOWED_ORIGINS = [
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+MAX_DOCX_BYTES = 10 * 1024 * 1024
+
+# Allow local web app calls only.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -48,6 +57,36 @@ class ApplySwapsRequest(BaseModel):
     manifest: SwapManifest
 
 
+def load_docx_from_base64(resume_base64: str) -> Document:
+    """Decode and validate a base64 DOCX payload from the local frontend."""
+    encoded = resume_base64.strip()
+    if not encoded:
+        raise HTTPException(status_code=400, detail="Missing resume_base64.")
+
+    max_base64_chars = ((MAX_DOCX_BYTES + 2) // 3) * 4
+    if len(encoded) > max_base64_chars:
+        raise HTTPException(
+            status_code=400,
+            detail=f"DOCX file is too large. Maximum size is {MAX_DOCX_BYTES // (1024 * 1024)} MB.",
+        )
+
+    try:
+        docx_bytes = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid base64 resume data.")
+
+    if len(docx_bytes) > MAX_DOCX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"DOCX file is too large. Maximum size is {MAX_DOCX_BYTES // (1024 * 1024)} MB.",
+        )
+
+    try:
+        return Document(io.BytesIO(docx_bytes))
+    except (PackageNotFoundError, zipfile.BadZipFile, ValueError, KeyError, OSError):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid DOCX.")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "Resume Tailor"}
@@ -57,10 +96,11 @@ def health():
 def extract_text_endpoint(req: ExtractRequest):
     """Extract plain text from a base64-encoded DOCX."""
     try:
-        docx_bytes = base64.b64decode(req.resume_base64)
-        doc = Document(io.BytesIO(docx_bytes))
+        doc = load_docx_from_base64(req.resume_base64)
         text = extract_text(doc)
         return {"text": text, "char_count": len(text)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to extract text: {e}")
 
@@ -69,8 +109,7 @@ def extract_text_endpoint(req: ExtractRequest):
 def apply_swaps_endpoint(req: ApplySwapsRequest):
     """Apply swap manifest to the DOCX and return modified file as base64."""
     try:
-        docx_bytes = base64.b64decode(req.resume_base64)
-        doc = Document(io.BytesIO(docx_bytes))
+        doc = load_docx_from_base64(req.resume_base64)
 
         bullet_count_before = count_bullets(doc)
 

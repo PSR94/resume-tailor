@@ -75,7 +75,7 @@ Two prompts to ChatGPT. Total time: ~3–5 minutes.
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/resume-tailor.git
+git clone https://github.com/PSR94/resume-tailor.git
 cd resume-tailor
 ```
 
@@ -91,7 +91,7 @@ pip install -r requirements.txt
 ### 3. Install frontend dependencies
 
 ```bash
-cd ../webapp-chatgpt
+cd ..
 npm install
 ```
 
@@ -111,7 +111,6 @@ Server starts on `http://localhost:7842`
 
 **Terminal 2 — Start the web app:**
 ```bash
-cd webapp-chatgpt
 npm run dev
 ```
 App opens at `http://localhost:3001`
@@ -120,6 +119,24 @@ Or use the one-command script from the root:
 ```bash
 ./start.sh
 ```
+
+---
+
+## Local development checklist
+
+Use this flow when changing the project locally:
+
+1. Start the app for manual testing:
+   ```bash
+   ./start.sh
+   ```
+2. Open `http://localhost:3001` and test the resume tailoring workflow.
+3. Before sharing changes, run the full verification suite:
+   ```bash
+   npm run verify
+   ```
+
+`./start.sh` is for running the local server and frontend together. `npm run verify` is for tests, build, and backend compile checks.
 
 ---
 
@@ -154,19 +171,21 @@ resume-tailor/
 │   ├── docx_engine.py         # DOCX parsing, swap engine, bold preservation
 │   └── requirements.txt
 │
-├── webapp-chatgpt/            # React web app — ChatGPT bridge
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── Landing.tsx    # Landing page
-│   │   │   └── App.tsx        # Full tailoring tool (all steps)
-│   │   ├── lib/
-│   │   │   ├── prompts.ts     # ChatGPT prompt templates
-│   │   │   └── storage.ts     # Session persistence (localStorage)
-│   │   └── styles/
-│   │       ├── global.css     # CSS variables, resets
-│   │       ├── landing.css    # Landing page styles
-│   │       └── app.css        # App tool styles
-│   └── index.html
+├── src/                       # React web app — ChatGPT bridge
+│   ├── pages/
+│   │   ├── Landing.tsx        # Landing page
+│   │   └── App.tsx            # Full tailoring tool (all steps)
+│   ├── lib/
+│   │   ├── prompts.ts         # ChatGPT prompt templates
+│   │   └── storage.ts         # Session persistence (localStorage)
+│   └── styles/
+│       ├── global.css         # CSS variables, resets
+│       ├── landing.css        # Landing page styles
+│       └── app.css            # App tool styles
+│
+├── index.html
+├── package.json               # Frontend scripts (dev/build/preview)
+├── vite.config.ts             # Vite config (localhost:3001)
 │
 └── start.sh                   # One-command startup script
 ```
@@ -211,9 +230,20 @@ Result: if your resume had `**Python**` and `**AWS**` bolded, new bullets mentio
 
 ## Troubleshooting
 
+**Run all checks**
+```bash
+npm run verify
+```
+
 **Server not running (red indicator in the app)**
 ```bash
 cd server && source .venv/bin/activate && python main.py
+```
+
+**Run backend tests**
+```bash
+cd server
+pytest
 ```
 
 **ChatGPT returns text instead of JSON**

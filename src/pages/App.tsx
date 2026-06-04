@@ -2,17 +2,24 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { buildScoringPrompt, buildSwapPrompt } from "../lib/prompts";
 import { saveSession, loadSession, clearSession, saveProfile, loadProfile } from "../lib/storage";
+import { parseChatGPTJSON, validateScoringResponse, validateSwapResponse, type ScoringResponse, type SkillConfirm, type SwapItem } from "../lib/validation";
 import "../styles/app.css";
 
-interface SwapItem { id: string; action: string; section: string; roleIndex: number; bulletIndex: number; originalBullet: string; originalScore: number; newBullet: string; newScore: number; jdSkillsAddressed: string[]; approved: boolean; userEdited?: string; }
-interface SkillConfirm { skill: string; context: string; confirmed: boolean | null; }
 interface Manifest { jobTitle: string; company: string; jdSummary: string; keySkillsFound: string[]; keySkillsMissing: string[]; atsKeywordGaps: string[]; swaps: SwapItem[]; skillsToConfirm: SkillConfirm[]; }
 interface Profile { resumeText: string; resumeBase64: string; resumeFileName: string; }
 type Step = "upload" | "jd" | "scoring-prompt" | "scoring-paste" | "swap-prompt" | "swap-paste" | "confirm-skills" | "swaps" | "done";
 
-function parseJSON(raw: string): unknown {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  return JSON.parse((fenced ? fenced[1] : raw).trim());
+async function readApiError(response: Response): Promise<string> {
+  const fallback = `Request failed with status ${response.status}.`;
+  try {
+    const data = await response.json();
+    if (typeof data.detail === "string" && data.detail.trim()) return data.detail;
+    if (Array.isArray(data.detail)) return data.detail.map((item) => item.msg ?? JSON.stringify(item)).join("; ");
+    return fallback;
+  } catch {
+    const text = await response.text().catch(() => "");
+    return text.trim() || fallback;
+  }
 }
 
 export default function App() {
@@ -25,11 +32,13 @@ export default function App() {
   const [manifest, setManifestRaw] = useState<Manifest | null>(null);
   const [pasteValue, setPasteValue] = useState("");
   const [parseError, setParseError] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [applyError, setApplyError] = useState("");
   const [copied, setCopied] = useState(false);
   const [serverOk, setServerOk] = useState<boolean | null>(null);
 
   function persist(patch: Record<string, unknown>) { sessionRef.current = { ...sessionRef.current, ...patch }; saveSession(sessionRef.current); }
-  const setStep = (s: Step) => { setStepRaw(s); persist({ step: s }); setPasteValue(""); setParseError(""); setCopied(false); };
+  const setStep = (s: Step) => { setStepRaw(s); persist({ step: s }); setPasteValue(""); setParseError(""); setUploadError(""); setApplyError(""); setCopied(false); };
   const setJdText = (t: string) => { setJdTextRaw(t); persist({ jdText: t }); };
   const setScoring = (d: unknown) => { setScoringRaw(d); persist({ scoring: d }); };
   const setManifest = useCallback((fn: Manifest | null | ((m: Manifest | null) => Manifest | null)) => {
@@ -52,16 +61,21 @@ export default function App() {
 
   async function handleResumeUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]; if (!file) return;
+    setUploadError("");
     const reader = new FileReader();
     reader.onload = async (ev) => {
       const base64 = (ev.target?.result as string).split(",")[1];
       try {
         const res = await fetch("http://localhost:7842/extract-text", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume_base64: base64 }) });
+        if (!res.ok) { setUploadError(await readApiError(res)); return; }
         const data = await res.json();
         const update = { resumeFileName: file.name, resumeBase64: base64, resumeText: data.text };
         setProfile((p) => { const n = { ...p, ...update }; saveProfile(n); return n; });
         setStep("jd");
-      } catch { alert("Local server not running. Run: python server/main.py"); }
+      } catch {
+        setServerOk(false);
+        setUploadError("Local server not running. Run: cd server && python main.py");
+      }
     };
     reader.readAsDataURL(file);
   }
@@ -71,8 +85,7 @@ export default function App() {
   function handlePasteScoring() {
     setParseError("");
     try {
-      const data = parseJSON(pasteValue) as Record<string, unknown>;
-      if (!data.bullets) throw new Error("Missing 'bullets' field. Make sure you copied the full JSON response from ChatGPT.");
+      const data = validateScoringResponse(parseChatGPTJSON(pasteValue));
       setScoring(data); setStep("swap-prompt");
     } catch (e: unknown) { setParseError((e as Error).message); }
   }
@@ -80,26 +93,29 @@ export default function App() {
   function handlePasteSwaps() {
     setParseError("");
     try {
-      const data = parseJSON(pasteValue) as { swaps: SwapItem[]; skillsToConfirm: SkillConfirm[] };
-      if (!data.swaps) throw new Error("Missing 'swaps' field. Make sure you copied the full JSON response from ChatGPT.");
-      const s = scoring as Record<string, unknown>;
-      const m: Manifest = { jobTitle: s.jobTitle as string ?? "", company: s.company as string ?? "", jdSummary: s.jdSummary as string ?? "", keySkillsFound: s.keySkillsFound as string[] ?? [], keySkillsMissing: s.keySkillsMissing as string[] ?? [], atsKeywordGaps: s.atsKeywordGaps as string[] ?? [], swaps: data.swaps.map((sw) => ({ ...sw, approved: true })), skillsToConfirm: data.skillsToConfirm ?? [] };
+      const data = validateSwapResponse(parseChatGPTJSON(pasteValue));
+      const s = scoring as ScoringResponse;
+      const m: Manifest = { jobTitle: s.jobTitle, company: s.company, jdSummary: s.jdSummary, keySkillsFound: s.keySkillsFound, keySkillsMissing: s.keySkillsMissing, atsKeywordGaps: s.atsKeywordGaps, swaps: data.swaps, skillsToConfirm: data.skillsToConfirm };
       setManifest(m); setStep(m.skillsToConfirm.length > 0 ? "confirm-skills" : "swaps");
     } catch (e: unknown) { setParseError((e as Error).message); }
   }
 
   async function handleApplySwaps() {
     if (!manifest) return;
+    setApplyError("");
     try {
       const approved = { ...manifest, swaps: manifest.swaps.filter((s) => s.approved).map((s) => ({ ...s, newBullet: s.userEdited ?? s.newBullet })) };
       const res = await fetch("http://localhost:7842/apply-swaps", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resume_base64: profile.resumeBase64, manifest: approved }) });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) { setApplyError(await readApiError(res)); return; }
       const data = await res.json();
       const link = document.createElement("a");
       link.href = `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${data.docx_base64}`;
       link.download = data.filename; link.click();
       clearSession(); setStep("done");
-    } catch (e: unknown) { alert(`Error: ${(e as Error).message}`); }
+    } catch {
+      setServerOk(false);
+      setApplyError("Local server not running. Run: cd server && python main.py");
+    }
   }
 
   const scoringPrompt = profile.resumeText && jdText ? buildScoringPrompt(profile.resumeText, jdText) : "";
@@ -109,16 +125,25 @@ export default function App() {
     <div className="app-layout">
       <AppNav onHome={() => navigate("/")} step={step} serverOk={serverOk} />
       <main className="app-main">
-        {step === "upload" && <UploadStep serverOk={serverOk} onUpload={handleResumeUpload} onCheckServer={checkServer} />}
+        {step === "upload" && <UploadStep serverOk={serverOk} error={uploadError} onDismissError={() => setUploadError("")} onUpload={handleResumeUpload} onCheckServer={checkServer} />}
         {step === "jd" && <JDStep profile={profile} jdText={jdText} onJdChange={setJdText} onNext={() => setStep("scoring-prompt")} onBack={() => setStep("upload")} />}
         {step === "scoring-prompt" && <PromptStep stepNumber={1} title="Copy this prompt into ChatGPT" description="Asks ChatGPT to score every bullet against the JD. Open ChatGPT, paste it, wait for the response, then come back." prompt={scoringPrompt} copied={copied} onCopy={() => copyPrompt(scoringPrompt)} onNext={() => setStep("scoring-paste")} onBack={() => setStep("jd")} />}
         {step === "scoring-paste" && <PasteStep stepNumber={2} title="Paste ChatGPT's response" description='Copy the entire JSON response from ChatGPT and paste it below. It should start with { "jobTitle": ...' placeholder={'{\n  "jobTitle": "...",\n  "bullets": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteScoring} onBack={() => setStep("scoring-prompt")} submitLabel="Parse Scores →" />}
         {step === "swap-prompt" && scoring && <ScoringPreviewStep scoring={scoring} swapPrompt={swapPrompt} copied={copied} onCopy={() => copyPrompt(swapPrompt)} onNext={() => setStep("swap-paste")} onBack={() => setStep("scoring-paste")} />}
         {step === "swap-paste" && <PasteStep stepNumber={4} title="Paste ChatGPT's improvement response" description='Paste the JSON response. It should start with { "swaps": ...' placeholder={'{\n  "swaps": [...],\n  "skillsToConfirm": [...]\n}'} value={pasteValue} onChange={setPasteValue} error={parseError} onSubmit={handlePasteSwaps} onBack={() => setStep("swap-prompt")} submitLabel="Parse Swaps →" />}
         {step === "confirm-skills" && manifest && <ConfirmSkillsStep manifest={manifest} onConfirm={(i, v) => setManifest((m) => { if (!m) return m; const sc = [...m.skillsToConfirm]; sc[i] = { ...sc[i], confirmed: v }; return { ...m, skillsToConfirm: sc }; })} onDone={() => { setManifest((m) => { if (!m) return m; const denied = m.skillsToConfirm.filter((s) => s.confirmed === false).map((s) => s.skill.toLowerCase()); return { ...m, swaps: m.swaps.filter((s) => !s.jdSkillsAddressed.some((sk) => denied.includes(sk.toLowerCase()))) }; }); setStep("swaps"); }} onBack={() => setStep("swap-paste")} />}
-        {step === "swaps" && manifest && <SwapsStep manifest={manifest} onToggle={(id) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, approved: !s.approved } : s) } : m)} onEdit={(id, t) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, userEdited: t } : s) } : m)} onApply={handleApplySwaps} onBack={() => setStep("swap-paste")} />}
+        {step === "swaps" && manifest && <SwapsStep manifest={manifest} error={applyError} onDismissError={() => setApplyError("")} onToggle={(id) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, approved: !s.approved } : s) } : m)} onEdit={(id, t) => setManifest((m) => m ? { ...m, swaps: m.swaps.map((s) => s.id === id ? { ...s, userEdited: t } : s) } : m)} onApply={handleApplySwaps} onBack={() => setStep("swap-paste")} />}
         {step === "done" && <DoneStep onReset={() => { clearSession(); setJdTextRaw(""); setScoringRaw(null); setManifestRaw(null); setStepRaw("jd"); }} />}
       </main>
+    </div>
+  );
+}
+
+function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div className="app-error" role="alert">
+      <span>{message}</span>
+      <button type="button" aria-label="Dismiss error" onClick={onDismiss}>×</button>
     </div>
   );
 }
@@ -143,13 +168,14 @@ function AppNav({ onHome, step, serverOk }: { onHome: () => void; step: Step; se
   );
 }
 
-function UploadStep({ serverOk, onUpload, onCheckServer }: { serverOk: boolean | null; onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void; onCheckServer: () => void }) {
+function UploadStep({ serverOk, error, onDismissError, onUpload, onCheckServer }: { serverOk: boolean | null; error: string; onDismissError: () => void; onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void; onCheckServer: () => void }) {
   return (
     <div className="panel center-panel">
       <div className="panel-icon">📄</div>
       <h1 className="panel-title">Upload Your Resume</h1>
       <p className="panel-sub">Upload your DOCX once. Your formatting, page count, and structure are locked — they never change.</p>
       {serverOk === false && <div className="warn-box">⚠ Local server not running.<code>cd server && python main.py</code><button className="btn-ghost-sm" style={{ marginTop: 8 }} onClick={onCheckServer}>Check again</button></div>}
+      {error && <ErrorBanner message={error} onDismiss={onDismissError} />}
       <label className="upload-zone"><input type="file" accept=".docx" onChange={onUpload} /><span className="upload-zone-icon">⬆</span><span className="upload-zone-label">Click to upload your DOCX resume</span><span className="upload-zone-hint">DOCX only · stays on your device</span></label>
       <div className="how-it-works-mini">
         {["Upload resume", "Paste JD", "Copy → ChatGPT", "Paste back", "Download DOCX"].map((s, i, arr) => (
@@ -223,7 +249,7 @@ function ConfirmSkillsStep({ manifest, onConfirm, onDone, onBack }: { manifest: 
   );
 }
 
-function SwapsStep({ manifest, onToggle, onEdit, onApply, onBack }: { manifest: Manifest; onToggle: (id: string) => void; onEdit: (id: string, t: string) => void; onApply: () => void; onBack: () => void }) {
+function SwapsStep({ manifest, error, onDismissError, onToggle, onEdit, onApply, onBack }: { manifest: Manifest; error: string; onDismissError: () => void; onToggle: (id: string) => void; onEdit: (id: string, t: string) => void; onApply: () => void; onBack: () => void }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const approved = manifest.swaps.filter((s) => s.approved).length;
   return (
@@ -231,7 +257,7 @@ function SwapsStep({ manifest, onToggle, onEdit, onApply, onBack }: { manifest: 
       <div className="panel-header"><div><h1 className="panel-title">Review Swaps</h1><p className="panel-sub">{approved} of {manifest.swaps.length} approved. Toggle off any to skip. Click green bullet to edit.</p></div><button className="btn-ghost-sm" onClick={onBack}>← Back</button></div>
       <div className="swaps-layout">
         <div className="swaps-list">{manifest.swaps.map((swap) => (<div key={swap.id} className={`swap-card ${swap.approved ? "approved" : "rejected"}`}><div className="swap-card-header"><div className="swap-meta"><span className="swap-section-tag">{swap.section}</span><span className="swap-skills-tag">{swap.jdSkillsAddressed.join(", ")}</span></div><label className="toggle-switch"><input type="checkbox" checked={swap.approved} onChange={() => onToggle(swap.id)} /><span className="toggle-track"><span className="toggle-thumb" /></span></label></div><div className="swap-diff-grid"><div className="diff-block old"><div className="diff-label">Remove · {swap.originalScore}/10</div><p>{swap.originalBullet}</p></div><div className="diff-arrow">→</div><div className="diff-block new" onClick={() => setEditingId(swap.id)} title="Click to edit"><div className="diff-label">Add · {swap.newScore}/10 ✏</div>{editingId === swap.id ? <textarea className="inline-edit" defaultValue={swap.userEdited ?? swap.newBullet} autoFocus onBlur={(e) => { onEdit(swap.id, e.target.value); setEditingId(null); }} /> : <p>{swap.userEdited ?? swap.newBullet}</p>}</div></div></div>))}</div>
-        <div className="swaps-sidebar"><div className="card summary-card"><div className="card-title">Summary</div><div className="summary-rows"><div className="summary-row"><span>Approved</span><span className="summary-val green">{approved}</span></div><div className="summary-row"><span>Skipped</span><span className="summary-val muted">{manifest.swaps.length - approved}</span></div></div>{manifest.atsKeywordGaps.length > 0 && (<><div className="card-title" style={{ marginTop: 16 }}>ATS Gaps</div><div className="tag-cloud">{manifest.atsKeywordGaps.map((k) => <span key={k} className="tag tag-yellow">{k}</span>)}</div></>)}<button className="btn-accent full-w" style={{ marginTop: 20 }} onClick={onApply} disabled={approved === 0}>Apply {approved} Swap{approved !== 1 ? "s" : ""} & Download →</button></div></div>
+        <div className="swaps-sidebar"><div className="card summary-card">{error && <ErrorBanner message={error} onDismiss={onDismissError} />}<div className="card-title">Summary</div><div className="summary-rows"><div className="summary-row"><span>Approved</span><span className="summary-val green">{approved}</span></div><div className="summary-row"><span>Skipped</span><span className="summary-val muted">{manifest.swaps.length - approved}</span></div></div>{manifest.atsKeywordGaps.length > 0 && (<><div className="card-title" style={{ marginTop: 16 }}>ATS Gaps</div><div className="tag-cloud">{manifest.atsKeywordGaps.map((k) => <span key={k} className="tag tag-yellow">{k}</span>)}</div></>)}<button className="btn-accent full-w" style={{ marginTop: 20 }} onClick={onApply} disabled={approved === 0}>Apply {approved} Swap{approved !== 1 ? "s" : ""} & Download →</button></div></div>
       </div>
     </div>
   );

@@ -5,25 +5,25 @@ import "../styles/landing.css";
 const STEPS = [
   { icon: "📄", title: "Upload Your Resume", desc: "Upload your DOCX template once. Your formatting, page count, and bullet structure are locked permanently." },
   { icon: "🔍", title: "Paste the Job Description", desc: "Copy any JD from LinkedIn, Greenhouse, Lever, or any job board and paste it in." },
-  { icon: "📋", title: "Copy Prompt to ChatGPT", desc: "We generate a perfect prompt. You paste it into ChatGPT (your $20/month account). No API keys, no extra cost." },
+  { icon: "📋", title: "Copy Prompt to ChatGPT", desc: "We generate the prompt. You paste it into ChatGPT yourself. No API key or provider setup." },
   { icon: "📥", title: "Paste the Response Back", desc: "Copy ChatGPT's JSON response and paste it back. We parse it instantly — scores, gaps, everything." },
   { icon: "✅", title: "Review Swaps & Download", desc: "See every proposed swap before it happens. Edit inline. Approve, reject. Download your tailored DOCX." },
 ];
 
-const TESTIMONIALS = [
-  { name: "Priya M.", role: "Data Engineer", text: "I was applying to 10+ jobs a week. This cut my tailoring time from 45 minutes to under 2 minutes per application. The formatting never breaks." },
-  { name: "Alex K.", role: "ML Engineer", text: "Unlike every other tool I tried, this one doesn't blow up my template. The swap system is brilliant — same resume, better targeting." },
-  { name: "Sam T.", role: "Product Manager", text: "The skill confirmation step is what sold me. It never adds anything I can't defend in an interview. Ethical and effective." },
-  { name: "Riya S.", role: "AI Researcher", text: "Gemini 2.5 Flash as the backend means it's essentially free with my Google subscription. Best free tool for job applications, period." },
+const APPROACH_POINTS = [
+  { title: "Your DOCX stays local", text: "The Python server runs on localhost and handles DOCX parsing, replacement, and download on your machine." },
+  { title: "ChatGPT is manual", text: "The app creates prompts. You decide what resume and job-description text to paste into ChatGPT, then paste the JSON response back." },
+  { title: "No hidden model layer", text: "There is no provider switcher, no API key screen, and no app-managed model selection. The workflow is intentionally copy-paste." },
+  { title: "You review every change", text: "The app proposes bullet swaps, but you approve, reject, or edit them before generating the final DOCX." },
 ];
 
 const FAQS = [
   { q: "Does it change my resume template or formatting?", a: "Never. Your template is locked. Page count, section structure, bullet count per role — all preserved exactly. The only thing that changes is the text content of individual bullets." },
-  { q: "What AI models does it support?", a: "Google Gemini (2.5 Pro, 3.1 Pro, 3.5 Flash), Anthropic Claude (Opus 4.8, Sonnet 4.6, Haiku 4.5), and OpenAI GPT (4o, 4.5, 5.5). If you have a Google AI Pro subscription, Gemini is free." },
+  { q: "What AI does it use?", a: "It uses ChatGPT manually through a copy-paste workflow. The app generates prompts, you paste them into ChatGPT, then paste ChatGPT's JSON response back into the app." },
   { q: "Will it add skills I don't actually have?", a: "No. A confirmation dialog appears for every skill not already evidenced in your resume. You must approve each addition. The AI is explicitly instructed not to fabricate or infer experience." },
-  { q: "Does it work with any job board?", a: "It extracts JD text from LinkedIn, Greenhouse, Lever, Workday, and most company career pages. For sites with unusual layouts, paste the JD text manually." },
-  { q: "How much does it cost?", a: "The tool itself is free. You pay only for AI API calls — roughly $0.03–0.06 per resume tailored using Claude Sonnet. With a Google AI Pro subscription, Gemini is included at no extra cost." },
-  { q: "Is my resume data private?", a: "Yes. Your resume is stored locally in your browser. The AI receives only plain text extracted from your DOCX — never the file itself. No data is stored on any server." },
+  { q: "Does it work with any job board?", a: "Yes, as long as you can copy the job description text. Paste the JD into the app, then the app includes that text in the ChatGPT prompt it generates for you." },
+  { q: "How much does it cost?", a: "The local app does not require an API key or charge per run. It is designed for a ChatGPT account you already use manually." },
+  { q: "Is my resume data private?", a: "Your DOCX file is processed by the local server and stored in your browser. When you use the prompt bridge, you manually paste extracted resume text and job-description text into ChatGPT, so that plain text is shared with ChatGPT by you." },
   { q: "What file formats are supported?", a: "DOCX only — this is by design. DOCX gives us run-level formatting control that PDF and other formats don't provide, which is what makes formatting preservation possible." },
   { q: "Can I use it for multiple resume templates?", a: "Yes. You can upload different DOCX templates for different role types — one for AI engineering roles, one for data science, etc." },
 ];
@@ -50,11 +50,11 @@ export default function Landing() {
           </div>
           <div className="nav-links">
             <a href="#how-it-works">How it works</a>
-            <a href="#testimonials">Reviews</a>
+            <a href="#approach">Approach</a>
             <a href="#faq">FAQ</a>
           </div>
           <button className="btn-nav" onClick={() => navigate("/app")}>
-            Get Started Free →
+            Run Locally →
           </button>
         </div>
       </nav>
@@ -63,26 +63,25 @@ export default function Landing() {
       <section className="hero">
         <div className="hero-badge">
           <span className="badge-dot" />
-          No API key · Uses your ChatGPT Plus · 100% free
+          No API key · Copy-paste with ChatGPT · Local DOCX processing
         </div>
         <h1 className="hero-title">
           Tailor your resume using<br />
-          <span className="hero-gradient">ChatGPT you already pay for</span>
+          <span className="hero-gradient">your ChatGPT account</span>
         </h1>
         <p className="hero-sub">
-          Already paying $20/month for ChatGPT Plus? Put it to work.<br />
-          We generate the perfect prompt — you paste it in, paste the response back, download your DOCX.
+          Generate a prompt, paste it into ChatGPT, paste the JSON response back, review the swaps, and download your tailored DOCX.
         </p>
         <div className="hero-cta">
           <button className="btn-primary btn-xl" onClick={() => navigate("/app")}>
-            Start Free — No API Key Needed
+            Start with your ChatGPT account
           </button>
           <a href="#how-it-works" className="btn-ghost-xl">See how it works ↓</a>
         </div>
         <div className="hero-proof">
           <span>✓ No API keys needed</span>
-          <span>✓ Works with ChatGPT Plus ($20/mo)</span>
-          <span>✓ Your data stays local</span>
+          <span>✓ DOCX processing runs locally</span>
+          <span>✓ You control what goes into ChatGPT</span>
         </div>
 
         {/* Floating UI preview */}
@@ -120,10 +119,10 @@ export default function Landing() {
       <section className="stats">
         <div className="stats-inner">
           {[
-            { val: "~60s", label: "per resume" },
-            { val: "85–95%", label: "format preservation" },
-            { val: "$0.04", label: "avg cost per run" },
-            { val: "0", label: "data stored on servers" },
+            { val: "2", label: "ChatGPT prompts" },
+            { val: "0", label: "API keys needed" },
+            { val: "DOCX", label: "format preserved locally" },
+            { val: "You", label: "approve every swap" },
           ].map((s) => (
             <div key={s.label} className="stat-item">
               <div className="stat-val">{s.val}</div>
@@ -191,53 +190,37 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* AI MODELS */}
-      <section className="models-section">
+      {/* PROMPT BRIDGE */}
+      <section className="prompt-bridge">
         <div className="section-inner">
-          <div className="section-tag">AI Models</div>
-          <h2 className="section-title">Works with the models you already pay for</h2>
-          <p className="section-sub">Bring your own API key — or use your existing Google AI Pro subscription for free.</p>
-          <div className="models-grid">
+          <div className="section-tag">Prompt Bridge</div>
+          <h2 className="section-title">No backend model. No API account.</h2>
+          <p className="section-sub">ResumeTailor prepares the work around ChatGPT. You stay in control of the AI step.</p>
+          <div className="testimonials-grid">
             {[
-              { provider: "Google", icon: "🔵", badge: "Free with AI Pro", models: ["Gemini 3.1 Pro", "Gemini 3.5 Flash", "Gemini 2.5 Pro"], highlight: true },
-              { provider: "Anthropic", icon: "🟣", badge: "$5 free credits", models: ["Claude Opus 4.8", "Claude Sonnet 4.6", "Claude Haiku 4.5"], highlight: false },
-              { provider: "OpenAI", icon: "⚫", badge: "Separate API billing", models: ["GPT-5.5 Pro", "GPT-5.5 Instant", "GPT-4o"], highlight: false },
-            ].map((p) => (
-              <div key={p.provider} className={`model-provider-card ${p.highlight ? "highlighted" : ""}`}>
-                <div className="provider-top">
-                  <span className="provider-icon">{p.icon}</span>
-                  <div>
-                    <div className="provider-name">{p.provider}</div>
-                    <div className={`provider-badge ${p.highlight ? "badge-green" : "badge-gray"}`}>{p.badge}</div>
-                  </div>
-                </div>
-                <ul className="model-list">
-                  {p.models.map((m) => (
-                    <li key={m}><span className="model-dot">·</span>{m}</li>
-                  ))}
-                </ul>
+              "The app extracts plain text from your DOCX and combines it with the job description.",
+              "You copy the generated prompt into ChatGPT and ask it to return structured JSON.",
+              "You paste that JSON back into ResumeTailor for scoring, swap review, and DOCX generation.",
+              "The app never asks for provider credentials because it does not call model APIs.",
+            ].map((text) => (
+              <div key={text} className="testimonial-card">
+                <p className="testimonial-text">{text}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* TESTIMONIALS */}
-      <section id="testimonials" className="testimonials">
+      {/* APPROACH */}
+      <section id="approach" className="testimonials">
         <div className="section-inner">
-          <div className="section-tag">Reviews</div>
-          <h2 className="section-title">Loved by job seekers</h2>
+          <div className="section-tag">Why this approach works</div>
+          <h2 className="section-title">Focused, local, and reviewable</h2>
           <div className="testimonials-grid">
-            {TESTIMONIALS.map((t, i) => (
-              <div key={i} className="testimonial-card">
-                <p className="testimonial-text">"{t.text}"</p>
-                <div className="testimonial-author">
-                  <div className="author-avatar">{t.name[0]}</div>
-                  <div>
-                    <div className="author-name">{t.name}</div>
-                    <div className="author-role">{t.role}</div>
-                  </div>
-                </div>
+            {APPROACH_POINTS.map((point) => (
+              <div key={point.title} className="testimonial-card">
+                <h3 className="approach-title">{point.title}</h3>
+                <p className="testimonial-text">{point.text}</p>
               </div>
             ))}
           </div>
@@ -267,9 +250,9 @@ export default function Landing() {
       <section className="cta-section">
         <div className="section-inner cta-inner">
           <h2 className="cta-title">Ready to tailor smarter?</h2>
-          <p className="cta-sub">No account. No credit card. Start with your Google AI Pro key.</p>
+          <p className="cta-sub">Run locally. No API key needed. Start with your ChatGPT account.</p>
           <button className="btn-primary btn-xl" onClick={() => navigate("/app")}>
-            Start Tailoring Free →
+            Start Tailoring Locally →
           </button>
         </div>
       </section>
@@ -285,7 +268,7 @@ export default function Landing() {
             <a href="#faq">FAQ</a>
             <a href="#how-it-works">How it works</a>
           </div>
-          <p className="footer-copy">© 2026 ResumeTailor. Your data never leaves your machine.</p>
+          <p className="footer-copy">© 2026 ResumeTailor. DOCX processing stays local; you choose what to paste into ChatGPT.</p>
         </div>
       </footer>
     </div>
